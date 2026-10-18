@@ -1,0 +1,483 @@
+Explicit VA-API encoding GPU and opt-in cross-device staging.
+
+LOWLAT_VAAPI_DEVICE selects an encoder render node independently from the
+captured output. Different devices use explicit eight-bit NV12 RAM staging;
+the default keeps its original GPU handle path. Prefer cached readback memory
+to avoid slow CPU reads from uncached GPU BAR memory.
+
+Tested RTX 5070 DP-1 capture -> RX 570 H.264/HEVC encoding. Both streams
+decode through FFmpeg. This adds latency and does not promise 144 FPS.
+
+--- a/crates/host/src/display/linux.rs
++++ b/crates/host/src/display/linux.rs
+@@ -158,6 +158,15 @@
+     },
+     /// A surface the display interface imported from the same allocation.
+     Open { surface: u32 },
++    /// Explicit cross-device path, copied through system memory.
++    Staged {
++        width: u32,
++        height: u32,
++        luma: Vec<u8>,
++        chroma: Vec<u8>,
++        at: Time,
++        index: u64,
++    },
+     /// A slot of the encoder's own ring, which the conversion wrote directly.
+     Vulkan { slot: usize },
+ }
+@@ -167,6 +176,7 @@
+         match self {
+             Self::Vendor { .. } => f.write_str("Vendor"),
+             Self::Open { surface } => write!(f, "Open({surface})"),
++            Self::Staged { .. } => f.write_str("Staged(system memory)"),
+             Self::Vulkan { slot } => write!(f, "Vulkan({slot})"),
+         }
+     }
+@@ -225,6 +235,8 @@
+     Vendor(&'a lowlat_encode::nvenc::Encoder<'a>),
+     /// The display stack's encoder, which takes a descriptor.
+     Open(&'a lowlat_encode::vaapi::Display<'a>),
++    /// Explicit eight-bit NV12 readback for an encoder on another GPU.
++    Staged,
+     /// The encoder that shares the capture's device: the conversion writes
+     /// its ring directly, so what arrives here is the device (a counted
+     /// clone) and the ring's targets, not an encoder to register with.
+@@ -246,6 +258,7 @@
+         match self {
+             Self::Vendor(_) => f.write_str("Vendor"),
+             Self::Open(_) => f.write_str("Open"),
++            Self::Staged => f.write_str("Staged(system memory)"),
+             Self::VulkanRing { targets, .. } => write!(f, "VulkanRing({})", targets.len()),
+         }
+     }
+@@ -446,6 +459,27 @@
+         }
+     }
+ 
++    /// Only the explicitly selected cross-device path reads back a frame.
++    fn stage(&mut self, slot: usize, at: Time, index: u64) -> Result<(), Error> {
++        if let Self::Vulkan(vk) = self
++            && let Some(Slot::Nv12(target)) = vk.targets.get_mut(slot)
++            && let Registration::Staged {
++                luma,
++                chroma,
++                at: captured_at,
++                index: frame_index,
++                ..
++            } = &mut target.registration
++        {
++            let (y, uv) = vk.device.read_nv12(&target.frame)?;
++            *luma = y;
++            *chroma = uv;
++            *captured_at = at;
++            *frame_index = index;
++        }
++        Ok(())
++    }
++
+     /// Poke the device with a trivial conversion, and wait for it.
+     ///
+     /// **For the wakeup cost an integrated device pays**, measured on the open
+@@ -843,7 +877,15 @@
+                         }
+                         // Routed before the backends are chosen; reaching it
+                         // here is a construction error, not a pairing.
+-                        Register::VulkanRing { .. } => Err(Error::NotTogether),
++                        Register::Staged if !colour.ten_bit() => Ok(Registration::Staged {
++                            width: shape.width,
++                            height: shape.height,
++                            luma: Vec::new(),
++                            chroma: Vec::new(),
++                            at: Time::now(),
++                            index: 0,
++                        }),
++                        Register::Staged | Register::VulkanRing { .. } => Err(Error::NotTogether),
+                     }?;
+                     Slot::Nv12(Target {
+                         frame,
+@@ -896,7 +938,9 @@
+                 // The third interface codes no full chroma on any measured
+                 // part, so the pairing is refused rather than silently built
+                 // subsampled.
+-                (true, Register::VulkanRing { .. }) => return Err(Error::NotTogether),
++                (true, Register::Staged | Register::VulkanRing { .. }) => {
++                    return Err(Error::NotTogether);
++                }
+             };
+             targets.push(slot);
+         }
+@@ -1314,6 +1358,9 @@
+             return Ok(None);
+         };
+         let at = self.flight_at.take().unwrap_or_else(Time::now);
++        let slot = self.next.saturating_sub(1) % self.pipeline.depth().max(1);
++        self.pipeline
++            .stage(slot, at, u64::try_from(self.next).unwrap_or(0))?;
+ 
+         // **What was drawn, not which buffer it was drawn into.** The exported
+         // identity says only that the buffer was not swapped, and this
+--- a/crates/host/src/stream/linux.rs
++++ b/crates/host/src/stream/linux.rs
+@@ -544,29 +544,49 @@
+         lowlat_common::log_error!("stream: display runtime unavailable, nothing will encode");
+         return Exit::Failed(status::ENCODER_UNAVAILABLE);
+     };
+-    // **The encoder is built on the device that drew the picture.** The
+-    // backend already follows the display; the node it encodes through has to
+-    // follow it as well, and a constant only agrees with the display while the
+-    // machine has one card. With two it depends on the order the kernel probed
+-    // them, so adding or moving a card silently repoints the encoder at the
+-    // other device: the picture is converted on one and coded on the other,
+-    // which works, crosses the bus every frame, and costs the difference with
+-    // nothing in the log to say so.
+-    // Without a display there is nothing to follow, and the first node is as
+-    // good an answer as any.
+-    let node = crate::display::Display::render_node_of(config.output.as_deref())
++    // An explicit VA-API node is the opt-in cross-device path. Default
++    // capture/encode still shares one GPU, with no CPU readback.
++    let capture_node = crate::display::Display::render_node_of(config.output.as_deref())
+         .filter(|_| config.display);
+-    let named = node
+-        .as_deref()
+-        .and_then(|node| std::ffi::CString::new(node.as_os_str().as_encoded_bytes()).ok());
+-    let asked = named.as_deref().unwrap_or(c"/dev/dri/renderD128");
++    let explicit = std::env::var_os("LOWLAT_VAAPI_DEVICE");
++    let node = explicit
++        .as_ref()
++        .map(std::path::PathBuf::from)
++        .or_else(|| capture_node.clone())
++        .unwrap_or_else(|| "/dev/dri/renderD128".into());
++    let staged = if explicit.is_some() && config.display {
++        let (Ok(encoding), Some(capture)) = (node.canonicalize(), capture_node.as_ref()) else {
++            lowlat_common::log_error!("stream: explicit encoding GPU is unavailable");
++            return Exit::Failed(status::ENCODER_UNAVAILABLE);
++        };
++        let Ok(capture) = capture.canonicalize() else {
++            return Exit::Failed(status::CAPTURE_UNAVAILABLE);
++        };
++        encoding != capture
++    } else {
++        false
++    };
++    if staged
++        && (config.ten_bit
++            || config.chroma_444
++            || matches!(config.convert, Some(lowlat_capture::Backend::Gl)))
++    {
++        lowlat_common::log_error!(
++            "stream: cross-GPU encoding requires eight-bit 4:2:0 and Vulkan conversion"
++        );
++        return Exit::Failed(status::ENCODER_CAPABILITIES);
++    }
++    let Ok(named) = std::ffi::CString::new(node.as_os_str().as_encoded_bytes()) else {
++        return Exit::Failed(status::ENCODER_UNAVAILABLE);
++    };
++    let asked = named.as_c_str();
+     lowlat_common::log_info!(
+         "stream: encoding through {}, {}",
+         asked.to_string_lossy(),
+-        if named.is_some() {
+-            "the device the display is on"
++        if staged {
++            "cross-GPU via system memory; increased latency"
+         } else {
+-            "which is the default; no display to follow"
++            "same-device/default path"
+         }
+     );
+     let Ok(display) = lowlat_encode::vaapi::Display::open(&display, asked) else {
+@@ -610,7 +630,11 @@
+             config.chroma_444,
+             config.output.as_deref(),
+             config.convert,
+-            crate::display::Register::Open(&display),
++            if staged {
++                crate::display::Register::Staged
++            } else {
++                crate::display::Register::Open(&display)
++            },
+         ) {
+             Ok(desktop) => Some(desktop),
+             Err(error) => {
+@@ -803,10 +827,36 @@
+         registration: &crate::display::Registration,
+         force_keyframe: bool,
+     ) -> bool {
+-        let crate::display::Registration::Open { surface } = registration else {
+-            return false;
+-        };
+-        self.submit_registered(*surface, force_keyframe).is_ok()
++        match registration {
++            crate::display::Registration::Open { surface } => {
++                self.submit_registered(*surface, force_keyframe).is_ok()
++            }
++            crate::display::Registration::Staged {
++                width,
++                height,
++                luma,
++                chroma,
++                at,
++                index,
++            } => {
++                let frame = lowlat_capture::Frame {
++                    width: *width,
++                    height: *height,
++                    luma: lowlat_capture::Plane {
++                        bytes: luma,
++                        stride: *width as usize,
++                    },
++                    chroma: lowlat_capture::Plane {
++                        bytes: chroma,
++                        stride: *width as usize,
++                    },
++                    captured_at: *at,
++                    index: *index,
++                };
++                self.submit(&frame, force_keyframe).is_ok()
++            }
++            _ => false,
++        }
+     }
+ }
+ 
+--- a/crates/capture/src/vulkan.rs
++++ b/crates/capture/src/vulkan.rs
+@@ -166,6 +166,19 @@
+         .any(|extension| extension.extension_name_as_c_str() == Ok(wanted))
+ }
+ 
++fn cached_readback_index(types: &[vk::MemoryType], allowed: u32) -> Option<u32> {
++    let wanted = vk::MemoryPropertyFlags::HOST_VISIBLE
++        | vk::MemoryPropertyFlags::HOST_COHERENT
++        | vk::MemoryPropertyFlags::HOST_CACHED;
++    types
++        .iter()
++        .enumerate()
++        .find(|(at, kind)| {
++            *at < 32 && allowed & (1 << at) != 0 && kind.property_flags.contains(wanted)
++        })
++        .and_then(|(at, _)| u32::try_from(at).ok())
++}
++
+ /// The device the display is on, ready to import from it.
+ ///
+ /// **Cheaply cloneable, one underlying device.** The display pipeline holds a
+@@ -893,6 +906,20 @@
+             .ok_or(Error::NoMemoryType)
+     }
+ 
++    /// Prefer cached system memory for CPU readback; reading uncached BAR
++    /// memory byte by byte can be much slower than a DMA transfer to RAM.
++    pub(crate) fn host_readback_memory(&self, allowed: u32) -> Result<u32, Error> {
++        let memory = unsafe {
++            self.instance
++                .get_physical_device_memory_properties(self.physical)
++        };
++        cached_readback_index(
++            &memory.memory_types[..memory.memory_type_count as usize],
++            allowed,
++        )
++        .map_or_else(|| self.host_visible_memory(allowed), Ok)
++    }
++
+     /// Record and run the copy, waiting for it to finish.
+     fn copy_image_to_buffer(&self, imported: &Imported, buffer: vk::Buffer) -> Result<(), Error> {
+         let pool_info = vk::CommandPoolCreateInfo::default().queue_family_index(self.queue_family);
+@@ -1315,4 +1342,22 @@
+             );
+         }
+     }
++    #[test]
++    fn readback_prefers_cached_memory_and_honours_allowed_bits() {
++        let visible =
++            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
++        let types = [
++            vk::MemoryType {
++                property_flags: visible | vk::MemoryPropertyFlags::DEVICE_LOCAL,
++                heap_index: 0,
++            },
++            vk::MemoryType {
++                property_flags: visible | vk::MemoryPropertyFlags::HOST_CACHED,
++                heap_index: 1,
++            },
++        ];
++        assert_eq!(super::cached_readback_index(&types, 3), Some(1));
++        assert_eq!(super::cached_readback_index(&types, 1), None);
++        assert_eq!(super::cached_readback_index(&types, 0), None);
++    }
+ }
+--- a/crates/capture/src/convert.rs
++++ b/crates/capture/src/convert.rs
+@@ -2445,7 +2445,7 @@
+     ) -> Result<Vec<u8>, Error> {
+         // SAFETY: the buffer was created on this device.
+         let requirements = unsafe { self.device.get_buffer_memory_requirements(buffer) };
+-        let index = self.host_visible_memory(requirements.memory_type_bits)?;
++        let index = self.host_readback_memory(requirements.memory_type_bits)?;
+         let allocate = vk::MemoryAllocateInfo::default()
+             .allocation_size(requirements.size)
+             .memory_type_index(index);
+--- a/crates/host/examples/encoding-gpu-probe.rs
++++ b/crates/host/examples/encoding-gpu-probe.rs
+@@ -0,0 +1,160 @@
++//! The stream loop against the real display, with a local seat.
++//!
++//!   sudo timed-stream [seconds]
++//!   LOWLAT_SYNTH=1 timed-stream [seconds]     the generator, no display needed
++//!
++//! Starts the same encode loop the daemon runs, capturing the display named
++//! in `LOWLAT_OUTPUT` (default `card0:HDMI-A-1`) and encoding on the backend
++//! named in `LOWLAT_BACKEND` (default the open stack), and reads what the
++//! seat receives for the duration. Prints the stage report the loop
++//! publishes.
++
++use lowlat_host::stream::{Backend, Codec, Config, Stream};
++use lowlat_host::timing::Report;
++
++fn main() {
++    let seconds: u64 = std::env::args()
++        .nth(1)
++        .and_then(|value| value.parse().ok())
++        .unwrap_or(15);
++    let output = std::env::var("LOWLAT_OUTPUT").ok();
++    // Nothing follows the display and lets LOWLAT_VULKAN_ENCODE prefer the
++    // third encoder; a name pins the backend exactly as the daemon's flag
++    // does. The old default of always naming one silently blocked the
++    // preference, and every ring "verification" through this probe was
++    // measuring the open backend.
++    let backend = match std::env::var("LOWLAT_BACKEND").as_deref() {
++        Ok("vendor") => Some(Backend::Vendor),
++        Ok("open") => Some(Backend::Open),
++        _ => None,
++    };
++
++    // **A watchdog, because a wedged display stack can hold a fence wait.**
++    // A run that has not finished in twice its budget plus setup is not going
++    // to; dying at a point of our choosing beats being killed mid-teardown
++    // minutes later, while holding imported scanout buffers and an armed
++    // vblank event. The alarm's default action ends the process.
++    // SAFETY: nothing else in this process arms an alarm.
++    unsafe { libc::alarm(u32::try_from(seconds).unwrap_or(30) * 2 + 30) };
++
++    let stream = Stream::start(Config {
++        // A live-run knob: the depth is otherwise the guests' to settle, and
++        // this probe drives the loop without any.
++        ten_bit: std::env::var("LOWLAT_TEN_BIT").is_ok_and(|v| v != "0"),
++        chroma_444: std::env::var("LOWLAT_CHROMA").is_ok_and(|v| v == "444"),
++        audio: None,
++        convert: None,
++        prefer_vulkan: false,
++        audio_on: false,
++        accept_microphone: false,
++        audio_kbps: 128,
++        allow_raw_audio: false,
++        output: output.clone(),
++        // `LOWLAT_SYNTH=1` runs the generator instead, which needs no display
++        // and no privilege, and is how the generator itself is checked.
++        display: std::env::var("LOWLAT_SYNTH").is_err(),
++        virtual_fallback: false,
++        wake_display: false,
++        own_display: lowlat_host::stream::OwnDisplay::default(),
++        width: 1920,
++        height: 1080,
++        fps: std::env::var("LOWLAT_FPS")
++            .ok()
++            .and_then(|s| s.parse().ok())
++            .unwrap_or(60),
++        cg_level: 1,
++        // A static desktop suppresses almost every frame, which leaves the
++        // stage percentiles measured over a handful of samples. Asking for
++        // every picture is what makes a timing run comparable.
++        full_fps: std::env::var("LOWLAT_FULL_FPS").is_ok_and(|v| v != "0"),
++        quality: lowlat_host::stream::Quality::default(),
++        codec: match std::env::var("LOWLAT_CODEC").as_deref() {
++            Ok("h265" | "hevc") => Codec::H265,
++            _ => Codec::H264,
++        },
++        backend,
++        configured_mbps: 10.0,
++        min_mbps: 1.0,
++        detail_rows: 0,
++    });
++
++    let wake = lowlat_net::Wake::new().expect("wake");
++    let seat = stream
++        .seats()
++        .take(
++            wake.handle().expect("handle"),
++            wake.handle().expect("a second handle"),
++            lowlat_host::stream::Declared::default(),
++        )
++        .expect("a free seat");
++
++    let began = std::time::Instant::now();
++    let mut received = 0usize;
++    // What the seat hands out is what the wire carries; written out so a
++    // decoder outside the project can say whether a client could start.
++    let mut bitstream = Vec::new();
++    while began.elapsed().as_secs() < seconds {
++        while let Some(frame) = seat.next_frame() {
++            bitstream.extend_from_slice(frame.bytes());
++            received += 1;
++        }
++        std::thread::sleep(std::time::Duration::from_millis(2));
++    }
++    let out = std::env::var_os("LOWLAT_TEST_OUTPUT")
++        .map(std::path::PathBuf::from)
++        .unwrap_or_else(|| std::env::temp_dir().join("lowlat-stream.h264"));
++    match std::fs::write(&out, &bitstream) {
++        Ok(()) => println!("wrote {} ({} bytes)", out.display(), bitstream.len()),
++        Err(error) => println!("write {}: {error}", out.display()),
++    }
++
++    let report: Report = stream.timings();
++    println!(
++        "received {received} frames in {seconds}s on {}",
++        output.as_deref().unwrap_or("the default output")
++    );
++    let line = |name: &str, p50: f64, p95: f64, p99: f64| {
++        println!("  {name:<9} p50 {p50:.3} ms  p95 {p95:.3} ms  p99 {p99:.3} ms");
++    };
++    line(
++        "acquire",
++        report.acquire.p50,
++        report.acquire.p95,
++        report.acquire.p99,
++    );
++    line(
++        "convert",
++        report.convert.p50,
++        report.convert.p95,
++        report.convert.p99,
++    );
++    line(
++        "pointer",
++        report.pointer.p50,
++        report.pointer.p95,
++        report.pointer.p99,
++    );
++    line(
++        "encode",
++        report.encode.p50,
++        report.encode.p95,
++        report.encode.p99,
++    );
++    line(
++        "publish",
++        report.publish.p50,
++        report.publish.p95,
++        report.publish.p99,
++    );
++    line(
++        "interval",
++        report.interval.p50,
++        report.interval.p95,
++        report.interval.p99,
++    );
++    println!(
++        "host stages sum p50 {:.3} ms  p99 {:.3} ms",
++        report.host_p50(),
++        report.host_p99()
++    );
++}

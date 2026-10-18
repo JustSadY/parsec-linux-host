@@ -123,12 +123,15 @@ int ph_runner_main(void) {
     args = ph_host_argv(&c, settings, device, NULL, &e);
     if (!args)
         goto finish;
-    char session[4120], pulse[128], owner_env[64];
+    char session[4120], pulse[128], owner_env[64], encoding_env[160];
     snprintf(session, sizeof session, "KESSEL_SESSION=%s", token);
     snprintf(pulse, sizeof pulse, "PULSE_SERVER=unix:/run/user/%lld/pulse/native", (long long)uid);
     snprintf(owner_env, sizeof owner_env, "LOWLAT_OWNER_UID=%lld", (long long)uid);
+    const char *encoding_gpu=json_string_value(json_object_get(settings,"encoding_gpu"));
+    int separate=encoding_gpu&&strcmp(encoding_gpu,"auto");
+    snprintf(encoding_env,sizeof encoding_env,"LOWLAT_VAAPI_DEVICE=/dev/dri/by-path/pci-%s-render",separate?encoding_gpu:"");
     char *env[] = {"PATH=/usr/bin:/bin", "HOME=/root", "LANG=C.UTF-8", session, pulse,
-                   owner_env, "LOWLAT_SHARE_FILE=" PH_ETC "/share.json", NULL};
+                   owner_env, "LOWLAT_SHARE_FILE=" PH_ETC "/share.json", separate?encoding_env:NULL, NULL};
     int pipefd[2];
     if (pipe2(pipefd, O_CLOEXEC)) {
         ph_fail(&e, "Cannot open host output");

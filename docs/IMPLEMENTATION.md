@@ -1,7 +1,7 @@
-# Native Host integration, 0.3.0
+# Native Host integration, 0.4.0
 
 The runtime is compiled C (`runtime/`). The extension runs inside the actual
-vendor client, calls its native ImGui helpers and shares ABI 6 through
+vendor client, calls its native ImGui helpers and shares ABI 7 through
 `native/bridge.h`. Python is build/test tooling only.
 
 ## Artifact and static evidence
@@ -90,3 +90,25 @@ advertisement. An actual vendor client is exercised in an isolated Xvfb and
 profile overlay: the native pending popup and click-to-decision path are observed.
 Fixture UI tests do not establish a real external guest connection. A second
 account and sustained streaming remain explicitly unverified.
+
+## Separate encoding GPU
+
+The validated `encoding_gpu` setting defaults to `auto` for old and new
+installations. `gpu` still selects capture and needs a connected output.
+Explicit encoding selects an available AMD/Intel PCI device independently;
+headless devices are allowed, VFIO/missing devices are rejected. NVENC on a
+separate named device is not advertised. The root runner derives a fixed
+`/dev/dri/by-path/pci-<validated PCI>-render` value for `LOWLAT_VAAPI_DEVICE`.
+It accepts no free-form executable or render path from the UI.
+
+Patch 0006 leaves the default device-handle path intact. An explicit different
+VA-API node uses eight-bit NV12 readback and hardware upload, preserving original
+capture timestamps. CPU-visible cached staging memory is preferred, avoiding
+slow reads from uncached GPU BAR memory. This is explicit RAM staging, not a
+zero-copy or zero-overhead claim. Ten-bit, 4:4:4 and OpenGL staging are refused.
+The native Encoding GPU selector and C autosave worker share ABI 7 (4200 bytes).
+
+An actual local stream loop, without a signaling peer, captured RTX 5070 DP-1
+and encoded on RX 570; both H.264 and HEVC outputs decoded successfully in
+FFmpeg. See ENCODING-GPU.md for measured limits. Real second-account playback
+and game FPS impact remain unmeasured.

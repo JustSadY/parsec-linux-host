@@ -35,7 +35,7 @@ extern void *vendor_calloc(size_t, size_t);
 #pragma GCC visibility pop
 
 /* Shared only with our unprivileged launcher. No account/session data. */
-_Static_assert(sizeof(struct Bridge) == 4136, "bridge ABI");
+_Static_assert(sizeof(struct Bridge) == 4200, "bridge ABI");
 static struct Bridge *bridge;
 static int attempted, mismatched;
 
@@ -172,6 +172,23 @@ void host_page(float width, void *context) {
         else if (b->gpu_usable[gpu_selected - 1]) copy_gpu(b->gpu, b->gpu_ids[gpu_selected - 1]);
     }
     finish(width, padding);
+
+    padding = row(width, "Encoding GPU", "Separate AMD/Intel encoding needs no connected display. Cross-GPU encoding copies frames through RAM and can increase latency.");
+    const char *encoding_gpus[9];
+    int encoding_map[9], encoding_count=1, encoding_selected=0;
+    encoding_gpus[0]="Same as capture GPU";
+    for (int i=0;i<gpu_count;++i) if (b->gpu_encoding_ok[i]) {
+        encoding_map[encoding_count]=i;
+        encoding_gpus[encoding_count]=b->gpu_labels[i];
+        if (equal(b->encoding_gpu,b->gpu_ids[i])) encoding_selected=encoding_count;
+        ++encoding_count;
+    }
+    if (combo("",&encoding_selected,encoding_gpus,encoding_count,-1)) {
+        copy_gpu(b->encoding_gpu,encoding_selected?b->gpu_ids[encoding_map[encoding_selected]]:"auto");
+        b->encoder=encoding_selected?2:0;
+        if (encoding_selected) b->conversion=0;
+    }
+    finish(width,padding);
 
     padding = row(width, "Encoder", "Hardware video encoder. Software CPU encoding is unavailable.");
     const char *volatile encoders[] = {S("Automatic"), S("NVIDIA NVENC"), S("VA-API")};

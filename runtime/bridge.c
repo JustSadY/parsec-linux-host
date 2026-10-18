@@ -16,6 +16,7 @@ static void utf8_copy(char *dest,size_t cap,const char *src){size_t n=strlen(src
 void ph_bridge_message(struct Bridge *b,const char *message){utf8_copy(b->status,sizeof b->status,message);}
 static int index_of(const char *s,const char *const *values,int count){for(int i=0;i<count;i++)if(s&&!strcmp(s,values[i]))return i;return 0;}
 static void load_form(struct Bridge *b,json_t *s){
+    utf8_copy(b->encoding_gpu,sizeof b->encoding_gpu,json_string_value(json_object_get(s,"encoding_gpu")));
     utf8_copy(b->name,sizeof b->name,json_string_value(json_object_get(s,"name")));utf8_copy(b->output,sizeof b->output,json_string_value(json_object_get(s,"output")));utf8_copy(b->gpu,sizeof b->gpu,json_string_value(json_object_get(s,"gpu")));
     b->fps=(int)json_integer_value(json_object_get(s,"fps"));b->bitrate=(int)json_integer_value(json_object_get(s,"bitrate"));
     b->codec=index_of(json_string_value(json_object_get(s,"codec")),codec,2);b->quality=index_of(json_string_value(json_object_get(s,"quality")),quality,3);b->encoder=index_of(json_string_value(json_object_get(s,"encoder")),encoder,3);b->conversion=index_of(json_string_value(json_object_get(s,"conversion")),conversion,3);
@@ -23,10 +24,11 @@ static void load_form(struct Bridge *b,json_t *s){
 }
 json_t *ph_bridge_form(ph_bridge *w,const struct Bridge *b,ph_error *e){
     if(b->codec<0||b->codec>=2||b->quality<0||b->quality>=3||b->encoder<0||b->encoder>=3||b->conversion<0||b->conversion>=3){ph_fail(e,"Invalid native form selection");return NULL;}
-    if(!memchr(b->name,0,sizeof b->name)||!memchr(b->output,0,sizeof b->output)||!memchr(b->gpu,0,sizeof b->gpu)){ph_fail(e,"Invalid native form text");return NULL;}
+    if(!memchr(b->name,0,sizeof b->name)||!memchr(b->output,0,sizeof b->output)||!memchr(b->gpu,0,sizeof b->gpu)||!memchr(b->encoding_gpu,0,sizeof b->encoding_gpu)){ph_fail(e,"Invalid native form text");return NULL;}
     if((b->autostart!=0&&b->autostart!=1)||(b->full_fps!=0&&b->full_fps!=1)||(b->mute_speakers!=0&&b->mute_speakers!=1)||(b->clipboard!=0&&b->clipboard!=1)){ph_fail(e,"Invalid native boolean selection");return NULL;}
     json_t *s=w->settings?json_deep_copy(w->settings):ph_settings_default();
     json_t *name=json_string(b->name),*output=json_string(b->output),*gpu=json_string(b->gpu);if(!name||!output||!gpu){json_decref(name);json_decref(output);json_decref(gpu);json_decref(s);ph_fail(e,"Invalid UTF-8 in native form");return NULL;}
+    json_object_set_new(s,"encoding_gpu",json_string(b->encoding_gpu));
     json_object_set_new(s,"name",name);json_object_set_new(s,"output",output);json_object_set_new(s,"gpu",gpu);
     json_object_set_new(s,"fps",json_integer(b->fps));json_object_set_new(s,"bitrate",json_integer(b->bitrate));json_object_set_new(s,"codec",json_string(codec[b->codec]));json_object_set_new(s,"quality",json_string(quality[b->quality]));json_object_set_new(s,"encoder",json_string(encoder[b->encoder]));json_object_set_new(s,"conversion",json_string(conversion[b->conversion]));
     json_object_set_new(s,"autostart",json_boolean(b->autostart));json_object_set_new(s,"full_fps",json_boolean(b->full_fps));json_object_set_new(s,"mute_speakers",json_boolean(b->mute_speakers));json_object_set_new(s,"clipboard",json_boolean(b->clipboard));json_t *valid=ph_settings_validate(s,e);json_decref(s);return valid;
@@ -41,7 +43,9 @@ void ph_bridge_publish_gpus(struct Bridge *b,json_t *devices){
         const char *pci=json_string_value(json_object_get(d,"pci")),*label=json_string_value(json_object_get(d,"label"));if(!pci||!label)continue;
         char text[160];snprintf(text,sizeof text,usable?"%s":"%s (no display connected)",label);
         utf8_copy(b->gpu_ids[count],sizeof b->gpu_ids[count],pci);utf8_copy(b->gpu_labels[count],sizeof b->gpu_labels[count],text);
-        b->gpu_usable[count]=usable;count++;
+        b->gpu_usable[count]=usable;
+        const char *vendor=json_string_value(json_object_get(d,"vendor"));
+        b->gpu_encoding_ok[count]=vendor&&(!strcmp(vendor,"1002")||!strcmp(vendor,"8086"));count++;
     }
     b->gpu_count=count;
 }

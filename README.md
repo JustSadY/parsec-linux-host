@@ -41,13 +41,23 @@ ve canlı **Gamepad / Keyboard / Mouse** izinleri yönetilir. Kendi hesabının
 uzaktaki cihazı otomatik kabul edilir. Aynı Linux bilgisayarından kendi host'una
 bağlanma döngüsü backend tarafından reddedilir.
 
+**Capture GPU** ekranın bağlı olduğu karttır. **Encoding GPU** ayrı seçilir:
+`Same as capture GPU` mevcut kartın kodlayıcısını kullanır; AMD/Intel seçildiğinde
+monitör bağlı olmasa da VA-API kodlar. Seçimler otomatik kaydedilir; **Stop
+hosting → Start hosting** ile uygulanır. Başka karta sessiz geçiş yapılmaz.
+
+RTX masaüstü + RX 570 kodlama, kareleri sistem belleği üzerinden aktarır ve
+gecikmeyi artırabilir. Bu yol sekiz bit H.264/HEVC, 4:2:0 ve Vulkan dönüşümü
+kullanır; 144 FPS garantisi vermez. RX 570 VFIO ile Windows'a verilmişken Linux
+kodlayıcısı olarak kullanılamaz. Ölçümler ve yöntem [GPU notlarında](docs/ENCODING-GPU.md).
+
 Yönetim işlemleri Polkit ile Linux yönetici doğrulaması ister. Pencereyi
 kapatmak host servisini durdurmaz.
 
-GPU PCI adresiyle saklanır. `card0/card1` sırası çalışma anında çözülür; VFIO
+Her iki GPU seçimi PCI adresiyle saklanır. `card0/card1` sırası çalışma anında çözülür; VFIO
 kartları listelenmez. Seçilen GPU'ya bağlı ekran gerekir: ekranı olmayan GPU'lar
 listenin sonunda "(no display connected)" notuyla görünür ama seçilemez, çünkü
-yakalama ve kodlama ekranın bağlı olduğu GPU'da yapılır. Sürücüler, VFIO,
+yakalama ekranın bağlı olduğu GPU'da yapılır; Encoding GPU seçimi bu kısıtı taşımaz. Sürücüler, VFIO,
 çekirdek parametreleri veya genel aygıt izinleri değiştirilmez.
 
 ## Arch / CachyOS build
@@ -56,7 +66,7 @@ yakalama ve kodlama ekranın bağlı olduğu GPU'da yapılır. Sürücüler, VFI
 make test
 make source
 makepkg -s
-sudo pacman -U ./parsec-linux-host-0.3.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./parsec-linux-host-0.4.0-1-x86_64.pkg.tar.zst
 ```
 
 `makepkg` root olarak çalıştırılmaz. Paket `parsec-bin` / `parsec` ile çakışır ve
@@ -86,8 +96,8 @@ Repository: [JustSadY/parsec-linux-host](https://github.com/JustSadY/parsec-linu
 python3 tools/prepare-aur.py --repo https://github.com/JustSadY/parsec-linux-host
 ```
 
-`dist/aur/PKGBUILD`, `.SRCINFO` ve `.install` üretilir. Kaynak arşivi `v0.3.0`
-GitHub release'ine `parsec-linux-host-0.3.0.tar.gz` adıyla eklenmelidir. AUR'a
+`dist/aur/PKGBUILD`, `.SRCINFO` ve `.install` üretilir. Kaynak arşivi `v0.4.0`
+GitHub release'ine `parsec-linux-host-0.4.0.tar.gz` adıyla eklenmelidir. AUR'a
 bu üç paketleme dosyasını gönder; kaynak arşivi veya proprietary binary gönderme.
 AUR indirme adresi release yayımlandığında çalışır. Üretici kendiliğinden
 GitHub release'i veya AUR paketi yayımlamaz.

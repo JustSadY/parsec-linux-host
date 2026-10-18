@@ -117,6 +117,26 @@ static void test_encoder_device(void) {
     json_decref(n); json_decref(a);
 }
 
+static void test_separate_encoder(void) {
+    ph_error e={0};json_t *devices=json_pack("[o,o]",amd(),nvidia());
+    json_t *settings=ph_settings_default();
+    CHECK(!strcmp(json_string_value(json_object_get(settings,"encoding_gpu")),"auto"),"old configurations keep same-GPU encoding");
+    json_object_set_new(settings,"encoding_gpu",json_string("0000:05:00.0"));
+    json_t *selected=ph_encoder_select(settings,devices,&e);
+    CHECK(selected&&!strcmp(json_string_value(json_object_get(selected,"vendor")),"1002")&&!json_array_size(json_object_get(selected,"outputs")),"headless AMD is valid for encoding");
+    json_decref(selected);
+    json_object_set_new(settings,"encoding_gpu",json_string("0000:01:00.0"));
+    selected=ph_encoder_select(settings,devices,&e);CHECK(!selected,"separate NVENC adapter is not falsely advertised");json_decref(selected);
+    json_object_set_new(settings,"encoding_gpu",json_string("0000:99:00.0"));
+    selected=ph_encoder_select(settings,devices,&e);CHECK(!selected,"missing or VFIO encoder is refused");json_decref(selected);
+    json_object_set_new(settings,"encoding_gpu",json_string("../../tmp"));
+    json_t *valid=ph_settings_validate(settings,&e);CHECK(!valid,"encoding device accepts PCI identity only");json_decref(valid);
+    struct Bridge b={0};strcpy(b.encoding_gpu,"0000:05:00.0");strcpy(b.gpu,"0000:01:00.0");strcpy(b.output,"DP-1");b.fps=60;b.bitrate=25;b.encoder=2;
+    ph_bridge w={.settings=ph_settings_default()};json_t *form=ph_bridge_form(&w,&b,&e);
+    CHECK(form&&!strcmp(json_string_value(json_object_get(form,"encoding_gpu")),"0000:05:00.0"),"native selection survives validated autosave snapshot");
+    json_decref(form);json_decref(w.settings);json_decref(settings);json_decref(devices);
+}
+
 static void test_share_secret(void) {
     char dir[] = "/tmp/parsec-host-test-XXXXXX";
     CHECK(mkdtemp(dir) != NULL, "temp etc dir");
@@ -258,11 +278,12 @@ static void test_gpus_published(void) {
     struct Bridge b;
     memset(&b, 0, sizeof b);
     json_t *devices = json_pack(
-        "[{s:s,s:s,s:[]},{s:s,s:s,s:[s]}]",
-        "pci", "0000:05:00.0", "label", "AMD [67df] · 0000:05:00.0", "outputs",
-        "pci", "0000:01:00.0", "label", "NVIDIA [2f04] · 0000:01:00.0", "outputs", "DP-1");
+        "[{s:s,s:s,s:s,s:[]},{s:s,s:s,s:s,s:[s]}]",
+        "pci", "0000:05:00.0", "label", "AMD [67df] · 0000:05:00.0", "vendor", "1002", "outputs",
+        "pci", "0000:01:00.0", "label", "NVIDIA [2f04] · 0000:01:00.0", "vendor", "10de", "outputs", "DP-1");
     ph_bridge_publish_gpus(&b, devices);
     CHECK(b.gpu_count == 2, "every GPU is listed");
+    CHECK(!b.gpu_encoding_ok[0]&&b.gpu_encoding_ok[1],"headless AMD remains selectable for encoding");
     CHECK(!strcmp(b.gpu_ids[0], "0000:01:00.0") && b.gpu_usable[0], "a GPU with a display comes first");
     CHECK(!strcmp(b.gpu_labels[0], "NVIDIA [2f04] · 0000:01:00.0"), "its label is unchanged");
     CHECK(!strcmp(b.gpu_ids[1], "0000:05:00.0") && !b.gpu_usable[1], "a GPU without one follows");
@@ -272,7 +293,7 @@ static void test_gpus_published(void) {
 }
 
 static void test_bridge_abi(void) {
-    CHECK(sizeof(struct Bridge) == 4136, "bridge struct size");
+    CHECK(sizeof(struct Bridge) == 4200, "bridge struct size");
     struct Bridge b;
     memset(&b, 0, sizeof b);
     json_t *status = json_pack("{s:b,s:s,s:s,s:s}", "share_enabled", 1,
@@ -459,6 +480,7 @@ int main(void) {
     test_validation();
     test_resolve_and_argv();
     test_encoder_device();
+    test_separate_encoder();
     test_share_secret();
     test_tray_state();
     test_tray_channel();

@@ -36,3 +36,17 @@ json_t *ph_resolve(json_t *s,json_t *devices,ph_error *e){
     }
     if(!best)ph_fail(e,"No connected display on the selected GPU; VFIO devices are excluded");return best?json_incref(best):NULL;
 }
+
+/* A headless AMD/Intel card can encode: only capture needs a lit output. */
+json_t *ph_encoder_select(json_t *s,json_t *devices,ph_error *e){
+    const char *pci=json_string_value(json_object_get(s,"encoding_gpu"));
+    if(!pci||!strcmp(pci,"auto")){ph_fail(e,"No separate encoding GPU selected");return NULL;}
+    json_t *d;size_t i;
+    json_array_foreach(devices,i,d){
+        const char *id=json_string_value(json_object_get(d,"pci")),*vendor=json_string_value(json_object_get(d,"vendor"));
+        if(!id||strcmp(id,pci))continue;
+        if(!vendor||(strcmp(vendor,"1002")&&strcmp(vendor,"8086"))){ph_fail(e,"Separate encoding GPU must use AMD or Intel VA-API");return NULL;}
+        return json_incref(d);
+    }
+    ph_fail(e,"Selected encoding GPU is unavailable; it may be bound to VFIO");return NULL;
+}

@@ -37,7 +37,9 @@ struct Bridge {
     uint64_t decision_id;
     uint32_t permissions_guest;
     uint8_t permissions_value[3];
+    char encoding_gpu[32];
+    int32_t gpu_encoding_ok[8];
 };
-#define BRIDGE_VERSION 6
+#define BRIDGE_VERSION 7
 #define BRIDGE_GUESTS_MAX 8
 #endif

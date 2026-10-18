@@ -7,7 +7,7 @@
 #include <string.h>
 #include <unistd.h>
 
-static const char defaults[]="{\"name\":\"\",\"gpu\":\"auto\",\"output\":\"auto\",\"fps\":60,\"bitrate\":10,\"codec\":\"h264\",\"encoder\":\"auto\",\"conversion\":\"auto\",\"quality\":\"lowest-latency\",\"full_fps\":false,\"mute_speakers\":true,\"clipboard\":true,\"autostart\":false,\"client_decoder\":\"hardware\",\"client_renderer\":\"opengl\"}";
+static const char defaults[]="{\"name\":\"\",\"gpu\":\"auto\",\"encoding_gpu\":\"auto\",\"output\":\"auto\",\"fps\":60,\"bitrate\":10,\"codec\":\"h264\",\"encoder\":\"auto\",\"conversion\":\"auto\",\"quality\":\"lowest-latency\",\"full_fps\":false,\"mute_speakers\":true,\"clipboard\":true,\"autostart\":false,\"client_decoder\":\"hardware\",\"client_renderer\":\"opengl\"}";
 json_t *ph_settings_default(void){return json_loads(defaults,0,NULL);}
 static int match(const char *s,const char *pattern){regex_t r;if(regcomp(&r,pattern,REG_EXTENDED|REG_NOSUB))return 0;int ok=regexec(&r,s,0,NULL,0)==0;regfree(&r);return ok;}
 static int choice(json_t *s,const char *key,const char *const *values){json_t *v=json_object_get(s,key);if(!json_is_string(v)||json_string_length(v)!=strlen(json_string_value(v)))return 0;for(int i=0;values[i];i++)if(!strcmp(json_string_value(v),values[i]))return 1;return 0;}
@@ -24,6 +24,8 @@ json_t *ph_settings_validate(json_t *data,ph_error *e){
     json_object_set_new(s,"name",json_stringn(start,len));
     const char *gpu=json_string_value(json_object_get(s,"gpu")),*output=json_string_value(json_object_get(s,"output"));
     if(!gpu||json_string_length(json_object_get(s,"gpu"))!=strlen(gpu)||!match(gpu,"^(auto|[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7])$")){ph_fail(e,"Invalid GPU PCI address");goto bad;}
+    const char *encoding_gpu=json_string_value(json_object_get(s,"encoding_gpu"));
+    if(!encoding_gpu||json_string_length(json_object_get(s,"encoding_gpu"))!=strlen(encoding_gpu)||!match(encoding_gpu,"^(auto|[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7])$")){ph_fail(e,"Invalid encoding GPU PCI address");goto bad;}
     if(!output||json_string_length(json_object_get(s,"output"))!=strlen(output)||!match(output,"^[A-Za-z0-9_.-]{1,40}$")){ph_fail(e,"Invalid display connector");goto bad;}
     const char *ints[]={"fps","bitrate"};int low[]={30,5},high[]={240,100};
     for(int i=0;i<2;i++){json_t *v=json_object_get(s,ints[i]);if(!json_is_integer(v)||json_integer_value(v)<low[i]||json_integer_value(v)>high[i]){ph_fail(e,"%s must be between %d and %d",ints[i],low[i],high[i]);goto bad;}}
@@ -45,10 +47,21 @@ char **ph_host_argv(ph_context *c,json_t *settings,json_t *device,const char *se
     json_t *s=ph_settings_validate(settings,e);if(!s)return NULL;
     if(secret&&*secret&&!match(secret,"^[0-9a-f]{8}$")){json_decref(s);ph_fail(e,"Invalid share secret");return NULL;}
     const char *card=json_string_value(json_object_get(device,"card"));const char *vendor=json_string_value(json_object_get(device,"vendor"));
+    const char *encoding_gpu=json_string_value(json_object_get(s,"encoding_gpu"));
+    int separate=strcmp(encoding_gpu,"auto")!=0;
+    if(separate){
+        json_t *devices=ph_inventory(c->drm,e),*chosen=ph_encoder_select(s,devices,e);
+        if(!chosen){json_decref(devices);goto bad;}
+        const char *capture_pci=json_string_value(json_object_get(device,"pci"));
+        int cross=!capture_pci||strcmp(capture_pci,encoding_gpu);
+        json_decref(chosen);json_decref(devices);
+        if(cross&&!strcmp(json_string_value(json_object_get(s,"conversion")),"opengl")){ph_fail(e,"Cross-GPU encoding requires Automatic or Vulkan conversion");goto bad;}
+        if(!strcmp(json_string_value(json_object_get(s,"encoder")),"nvenc")){ph_fail(e,"A separate AMD/Intel encoding GPU requires VA-API");goto bad;}
+    }
     const char *encoder=json_string_value(json_object_get(s,"encoder")),*conversion=json_string_value(json_object_get(s,"conversion"));
     json_t *outputs=json_object_get(device,"outputs");
     if(!card||!match(card,"^card[0-9]+$")||!vendor||!json_is_array(outputs)||!json_array_size(outputs)){ph_fail(e,"Invalid DRM device");goto bad;}
-    if((!strcmp(encoder,"nvenc")&&strcmp(vendor,"10de"))||(!strcmp(encoder,"vaapi")&&!strcmp(vendor,"10de"))){ph_fail(e,"Encoder does not match the selected GPU");goto bad;}
+    if(!separate&&((!strcmp(encoder,"nvenc")&&strcmp(vendor,"10de"))||(!strcmp(encoder,"vaapi")&&!strcmp(vendor,"10de")))){ph_fail(e,"Encoder does not match the selected GPU");goto bad;}
     char **args=calloc(40,sizeof *args);if(!args){ph_fail(e,"Out of memory");goto bad;}int i=0;
 #define ADD(v) do{args[i]=strdup(v);if(!args[i++]){ph_argv_free(args);ph_fail(e,"Out of memory");goto bad;}}while(0)
     char file[PATH_MAX];ph_path(file,sizeof file,c->lib,"lowlatd");ADD(file);ADD("--name");
@@ -64,7 +77,7 @@ char **ph_host_argv(ph_context *c,json_t *settings,json_t *device,const char *se
      * the signaling service gates on the secret carried by the invite link. */
     if(secret&&*secret){ADD("--secret");ADD(secret);}else{ADD("--owner-only");}
     ADD("--clipboard");ADD(json_is_true(json_object_get(s,"clipboard"))?"both":"off");
-    if(strcmp(encoder,"auto")){ADD("--encoder");ADD(encoder);}if(strcmp(conversion,"auto")){ADD("--convert");ADD(conversion);}
+    if(separate){ADD("--encoder");ADD("vaapi");}else if(strcmp(encoder,"auto")){ADD("--encoder");ADD(encoder);}if(strcmp(conversion,"auto")){ADD("--convert");ADD(conversion);}
     if(!json_is_true(json_object_get(s,"mute_speakers")))ADD("--no-host-mute");if(json_is_true(json_object_get(s,"full_fps")))ADD("--full-fps");
     json_decref(s);return args;
 #undef ADD

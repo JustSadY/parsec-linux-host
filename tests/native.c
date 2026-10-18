@@ -32,7 +32,7 @@ void *vendor_host_command(void*a,const void*b,uint32_t c,uint32_t*d){(void)a;(vo
 void *vendor_calloc(size_t a,size_t b){return calloc(a,b);}
 static void idle(struct Bridge*b){b->ack=b->seq;b->busy=0;}
 int main(void){
- struct Bridge b={.configured=1,.running=1};bridge=&b;attempted=1;
+ struct Bridge b={.configured=1,.running=1};strcpy(b.encoding_gpu,"auto");bridge=&b;attempted=1;
  strcpy(b.host_peer_id,"exact-local-peer");unsigned char record[0x2f8]={0},context[1]={1};
  strcpy((char*)record+0x294,"another-peer");linux_card(1,1,context,0,0,record,0,0);assert(!card_local&&context[0]==1);
  strcpy((char*)record+0x294,"exact-local-peer");linux_card(1,1,context,0,0,record,0,0);assert(card_local&&context[0]==1&&!record[0x2f5]);

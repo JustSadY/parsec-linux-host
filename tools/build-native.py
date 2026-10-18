@@ -99,7 +99,7 @@ def build(module, output):
         ui_extension_size=code[5], ui_state_size=state[5], native_host_tab=True,
         host_engine='lowlat', host_start_stub_unchanged=True, capability_builder_unchanged=True,
         patch_sites=['0x86164', '0x3cee8'] + [hex(h[0]) for h in hooks],
-        native_local_card=True, native_guest_menu=True, bridge_version=6,
+        native_local_card=True, native_guest_menu=True, bridge_version=7,
         extension_rva=hex(code[3]))
     (output / 'patch.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))

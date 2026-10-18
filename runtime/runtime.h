@@ -37,6 +37,7 @@ json_t *ph_settings_validate(json_t *, ph_error *);
 json_t *ph_settings_load(ph_context *, ph_error *);
 json_t *ph_inventory(const char *, ph_error *);
 json_t *ph_resolve(json_t *, json_t *, ph_error *);
+json_t *ph_encoder_select(json_t *, json_t *, ph_error *);
 char **ph_host_argv(ph_context *, json_t *, json_t *, const char *secret, ph_error *);
 void ph_argv_free(char **);
 json_t *ph_status(ph_context *, ph_error *);
