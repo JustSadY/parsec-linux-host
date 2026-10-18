@@ -1,0 +1,12 @@
+[Unit]
+Description=Parsec Linux host desktop session helper
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=/usr/lib/parsec-linux-host/lowlatd session
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target

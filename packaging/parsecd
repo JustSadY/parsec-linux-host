@@ -1,0 +1,6 @@
+#!/usr/bin/bash
+# Preserve a CLI route to the original vendor client, including peer_id=...
+if (( $# )); then
+    exec /usr/lib/parsec-linux-host/vendor/parsecd "$@"
+fi
+exec /usr/bin/parsec-linux-host

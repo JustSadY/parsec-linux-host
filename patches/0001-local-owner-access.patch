@@ -1,0 +1,104 @@
+diff --git a/crates/daemon/src/channel.rs b/crates/daemon/src/channel.rs
+index d3c60eb..6ac4fdb 100644
+--- a/crates/daemon/src/channel.rs
++++ b/crates/daemon/src/channel.rs
+@@ -20,7 +20,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
+ /// preference: a tray started by hand is not started by this service and has
+ /// nothing to be handed, so a path it cannot find is a tray that cannot
+ /// connect.
+-const SOCKET: &str = "/run/lowlatd/session";
++const SOCKET: &str = "/run/parsec-host/session";
+ 
+ /// The version both ends carry in their first frame.
+ ///
+@@ -181,10 +181,8 @@ pub(crate) fn listen() {
+ 
+ /// Bind the socket, replacing whatever a previous run left there.
+ ///
+-/// **World-writable, deliberately.** Any local user may connect, which is a
+-/// deferral with its cost written down rather than a position
+-/// (docs/07-platforms.md section 5.1); a mode that said otherwise here would
+-/// be an authorisation scheme hidden in a file permission.
++/// This local installation limits the control socket to the service's owner
++/// and group. systemd assigns the group to the desktop owner's private group.
+ fn bind(path: &str) -> std::io::Result<UnixListener> {
+     if let Some(parent) = std::path::Path::new(path).parent() {
+         std::fs::create_dir_all(parent)?;
+@@ -194,7 +192,7 @@ fn bind(path: &str) -> std::io::Result<UnixListener> {
+     // have failed for that one first.
+     let _ = std::fs::remove_file(path);
+     let listener = UnixListener::bind(path)?;
+-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o666))?;
++    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))?;
+     lowlat_common::log_info!("channel: listening, path={path}");
+     Ok(listener)
+ }
+@@ -474,6 +472,10 @@ fn serve(mut stream: UnixStream) {
+ /// not speak, or a role it does not know.
+ pub(crate) fn greet(stream: &mut UnixStream) -> Option<Greeting> {
+     let peer = peer_of(stream)?;
++    if !owner_allows(peer.uid, std::env::var("LOWLAT_OWNER_UID").ok().as_deref()) {
++        lowlat_common::log_warn!("channel: refused local uid={}", peer.uid);
++        return None;
++    }
+     stream
+         .set_read_timeout(Some(std::time::Duration::from_millis(HELLO_MS)))
+         .ok()?;
+@@ -514,6 +516,11 @@ pub(crate) fn greet(stream: &mut UnixStream) -> Option<Greeting> {
+     Some(Greeting { role, peer, can })
+ }
+ 
++/// The packaged root runner supplies this from its root-owned desktop owner.
++fn owner_allows(uid: u32, owner: Option<&str>) -> bool {
++    uid == 0 || owner.is_none_or(|text| text.parse::<u32>() == Ok(uid))
++}
++
+ /// Tell the session whether somebody is watching this machine.
+ ///
+ /// **A push rather than a question**, because it is a state the service owns
+@@ -970,7 +977,7 @@ mod tests {
+     /// this process on both ends however it is read: only a bound path
+     /// exercises the bind, the mode it is left with, and the accept.
+     #[test]
+-    fn a_bound_socket_accepts_and_is_reachable_by_anyone() {
++    fn a_bound_socket_accepts_and_is_limited_to_owner_and_group() {
+         let path = std::env::temp_dir().join(format!("lowlat-channel-{}", std::process::id()));
+         let path = path.to_str().expect("a printable path").to_string();
+         let listener = bind(&path).expect("bound");
+@@ -992,13 +999,22 @@ mod tests {
+         assert_eq!(greeting.peer.uid, unsafe { libc::getuid() });
+ 
+         let mode = std::fs::metadata(&path).expect("stat").permissions().mode();
+-        assert_eq!(mode & 0o777, 0o666, "a local user could not connect");
++        assert_eq!(mode & 0o777, 0o660, "control socket must exclude other users");
+ 
+         drop(accepted);
+         joined.join().expect("the client thread");
+         let _ = std::fs::remove_file(&path);
+     }
+ 
++    #[test]
++    fn packaged_owner_gate_rejects_other_desktop_users() {
++        assert!(owner_allows(1000, Some("1000")));
++        assert!(!owner_allows(1001, Some("1000")));
++        assert!(!owner_allows(1000, Some("not-a-uid")));
++        assert!(owner_allows(0, Some("1000")));
++        assert!(owner_allows(1000, None)); // Unpackaged upstream invocation.
++    }
++
+     #[test]
+     fn a_frame_arrives_as_it_left() {
+         let (mut a, mut b) = pair();
+diff --git a/crates/daemon/src/service.rs b/crates/daemon/src/service.rs
+index b527427..38a12ef 100644
+--- a/crates/daemon/src/service.rs
++++ b/crates/daemon/src/service.rs
+@@ -890,6 +890,8 @@ async fn session_loop(
+                         // offer gets an answer, including the ones we turn down.
+                         let refusal = if reject_all {
+                             Some("policy".to_string())
++                        } else if flag_set("--owner-only") && !offer.is_owner {
++                            Some("owner-only".to_string())
+                         } else {
+                             let transport = if offer.data.wants_web() {
+                                 Transport::Web

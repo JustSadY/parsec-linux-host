@@ -1,0 +1,48 @@
+[Unit]
+Description=Parsec compatible Linux host
+Wants=network-online.target modprobe@nvidia_uvm.service modprobe@uinput.service modprobe@uhid.service
+After=network-online.target modprobe@nvidia_uvm.service modprobe@uinput.service modprobe@uhid.service
+ConditionPathExists=/etc/parsec-host/account.json
+ConditionPathExists=/etc/parsec-host/owner.json
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=root
+# The authenticated helper writes a numeric desktop-owner group drop-in.
+Group=root
+ExecStartPre=-+/usr/bin/nvidia-modprobe -u -c=0
+ExecStart=/usr/lib/parsec-linux-host/service
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillMode=control-group
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH
+NoNewPrivileges=yes
+RuntimeDirectory=parsec-host
+RuntimeDirectoryMode=0750
+DevicePolicy=closed
+DeviceAllow=char-drm rw
+DeviceAllow=char-nvidia rwm
+DeviceAllow=char-nvidia-uvm rwm
+DeviceAllow=/dev/uinput rw
+DeviceAllow=/dev/uhid rw
+ProtectSystem=full
+ProtectHome=no
+InaccessiblePaths=-/home -/root
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

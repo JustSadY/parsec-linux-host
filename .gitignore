@@ -1,0 +1,14 @@
+/.cache/
+/build/
+/dist/
+/src/
+/pkg/
+/*.tar.gz
+/*.pkg.tar.*
+/*.deb
+/.makepkg*
+/*.log
+__pycache__/
+*.pyc
+/docs/preview.png
+/.SRCINFO.tmp

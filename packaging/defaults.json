@@ -1,0 +1,17 @@
+{
+  "name": "",
+  "gpu": "auto",
+  "output": "auto",
+  "fps": 60,
+  "bitrate": 10,
+  "codec": "h264",
+  "encoder": "auto",
+  "conversion": "auto",
+  "quality": "lowest-latency",
+  "full_fps": false,
+  "mute_speakers": true,
+  "clipboard": true,
+  "autostart": false,
+  "client_decoder": "hardware",
+  "client_renderer": "opengl"
+}

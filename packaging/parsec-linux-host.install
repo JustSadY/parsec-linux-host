@@ -1,0 +1,15 @@
+post_install() {
+    systemctl daemon-reload
+    printf '%s\n' 'Parsec Linux Host: open the app and connect your Host account.' \
+        'Hosting is opt-in. No system or global user service was enabled.' \
+        'For boot hosting: enable Start at Boot, then enable the current user session helper:' \
+        '  systemctl --user enable parsec-host-session.service'
+}
+post_upgrade() {
+    systemctl daemon-reload
+    printf '%s\n' 'Restart hosting when convenient to use the updated backend.'
+}
+post_remove() {
+    systemctl daemon-reload
+    printf '%s\n' 'Host credentials and settings remain in /etc/parsec-host.'
+}

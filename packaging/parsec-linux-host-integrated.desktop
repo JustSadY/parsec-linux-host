@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Parsec Linux Host
+Comment=Parsec client with native Linux hosting settings
+Exec=parsec-linux-host
+Icon=parsecd
+Terminal=false
+Categories=Network;RemoteAccess;
+StartupNotify=true
+StartupWMClass=Parsec Linux Host

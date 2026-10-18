@@ -1,0 +1,14 @@
+{
+  "parsec": {
+    "url": "https://builds.parsec.app/package/parsec-linux.deb",
+    "version": "150-104a",
+    "sha256": "c8a4407713d72dcb1c59f082977e81e1b9e8ffd679d0666882cde4c8a0821dd2",
+    "checked": "2026-10-18",
+    "observed_auto_update_module": "150-105c"
+  },
+  "lowlat": {
+    "commit": "1d2bb76d3cab31ab73dbd88ca07d2e071683a7bb",
+    "url": "https://codeload.github.com/nomi-san/lowlat/tar.gz/1d2bb76d3cab31ab73dbd88ca07d2e071683a7bb",
+    "sha256": "e30b4af9f4030b698bd814588fa5e8c3687b12efe823fb47f1ab78c1eb1bb55d"
+  }
+}
