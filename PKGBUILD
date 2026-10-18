@@ -39,6 +39,10 @@ sha256sums=('f1654531b4121676899b4c6fe22942fd6c8a387f316e7d2df2b94f722537be91'
             '10af623d573b566bfd3f9a5c36a509001e02be3da5a60e0f2e0f6920cb6eb983')
 
 prepare() {
+    # Extraction overwrites files but keeps ones a previous run's patches
+    # created, so start from the pinned archive every time.
+    rm -rf "$srcdir/lowlat-$_lowlat"
+    bsdtar -xf "$srcdir/lowlat-$_lowlat.tar.gz" -C "$srcdir"
     cd "$srcdir/lowlat-$_lowlat"
     patch -Np1 -i "$srcdir/$pkgname-$pkgver/patches/0001-local-owner-access.patch"
     patch -Np1 -i "$srcdir/$pkgname-$pkgver/patches/0002-probe-context-lifetime.patch"
