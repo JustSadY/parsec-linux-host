@@ -7,4 +7,4 @@ Icon=parsecd
 Terminal=false
 Categories=Network;RemoteAccess;
 StartupNotify=true
-StartupWMClass=Parsec Linux Host
+StartupWMClass=parsecd

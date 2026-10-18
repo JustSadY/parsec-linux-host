@@ -6,6 +6,7 @@
 /*.tar.gz
 /*.pkg.tar.*
 /*.deb
+/*.so
 /.makepkg*
 /*.log
 __pycache__/

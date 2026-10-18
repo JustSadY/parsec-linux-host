@@ -8,12 +8,12 @@ import re
 import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = '0.1.0'
+VERSION = '0.2.0'
 
 
 def main():
     files = []
-    for name in ('app', 'packaging', 'patches', 'tests', 'tools', 'docs', '.github'):
+    for name in ('app', 'native', 'packaging', 'patches', 'tests', 'tools', 'docs', '.github'):
         files += [p for p in (ROOT / name).rglob('*') if p.is_file()
                   and '__pycache__' not in p.parts and p.suffix not in ('.pyc', '.png')]
     files += [ROOT / name for name in ('LICENSE', 'README.md', 'upstream.json', 'Makefile', '.gitignore', '.gitattributes')]

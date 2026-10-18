@@ -1,6 +1,7 @@
 post_install() {
     systemctl daemon-reload
-    printf '%s\n' 'Parsec Linux Host: open the app and connect your Host account.' \
+    printf '%s\n' 'Parsec Linux Host: Settings -> Host is inside the Parsec client.' \
+        'First-time account setup: parsec-linux-host login (in a terminal).' \
         'Hosting is opt-in. No system or global user service was enabled.' \
         'For boot hosting: enable Start at Boot, then enable the current user session helper:' \
         '  systemctl --user enable parsec-host-session.service'

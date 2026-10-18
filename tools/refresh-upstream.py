@@ -10,6 +10,7 @@ import urllib.request
 
 root = Path(__file__).resolve().parents[1]
 metadata = json.loads((root / 'upstream.json').read_text())
+previous_digest = metadata['parsec']['sha256']
 url = 'https://builds.parsec.app/package/parsec-linux.deb'
 cache = root / '.cache'
 cache.mkdir(exist_ok=True)
@@ -27,9 +28,8 @@ metadata['parsec'].update(version=version, sha256=digest, checked=datetime.date.
 (root / 'upstream.json').write_text(json.dumps(metadata, indent=2) + '\n')
 recipe = (root / 'PKGBUILD').read_text()
 recipe = re.sub(r'^_parsecver=.*$', '_parsecver=' + version.replace('-', '_'), recipe, flags=re.M)
-recipe = re.sub(r"provides=\('parsec-bin=[^']+'\)", "provides=('parsec-bin=" + version.replace('-', '_') + "')", recipe)
-old = re.findall(r"'[0-9a-f]{64}'", recipe)
-recipe = recipe.replace(old[-1], "'" + digest + "'")
+# Loader updates do not change the hash-pinned native module/ABI.
+recipe = recipe.replace("'" + previous_digest + "'", "'" + digest + "'")
 (root / 'PKGBUILD').write_text(recipe)
 temp.replace(cache / 'parsec-linux.deb')
 print('Official installer:', version, digest)

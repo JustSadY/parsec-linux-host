@@ -1,14 +1,15 @@
 # Third-party components
 
-The Qt integration and packaging in this repository are MIT licensed.
-lowlat is MIT licensed; its full notice is in LICENSE.lowlat and preserved in packages.
-PySide6/Qt are system dependencies under their respective licenses.
+New native UI code, control integration and packaging: MIT. lowlat: MIT;
+its full notice is preserved in LICENSE.lowlat and packages.
 
-The official Parsec client is proprietary, owned by Parsec/Unity, and is NOT
-covered by this repository's MIT license. Its executable and runtime module are
-downloaded separately from https://builds.parsec.app/package/parsec-linux.deb
-during package construction. They are not committed to this repository and are
-not patched. Applicable vendor terms: https://parsec.app/terms-of-service.
+The official Parsec loader and module are proprietary Parsec/Unity software,
+not covered by this project's MIT license. They are downloaded from the vendor
+HTTPS server with explicit hashes during package construction. The build output
+is patched; vendor binary and decompiled source are not committed. Modification
+does not imply endorsement or official Linux hosting support. Vendor terms:
+https://unity.com/legal/parsec-additional-terms.
 
-This is an independent integration, not an official Parsec Linux hosting release.
-A matching appearance does not imply vendor endorsement or source availability.
+Upstream: https://github.com/nomi-san/lowlat.
+Loader: https://builds.parsec.app/package/parsec-linux.deb.
+Module: https://builds.parsec.app/channel/release/binary/linux/gz/parsecd-150-105c.so.

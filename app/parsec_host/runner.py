@@ -19,11 +19,15 @@ def main():
                PULSE_SERVER=f'unix:/run/user/{uid}/pulse/native', LOWLAT_OWNER_UID=str(uid))
     child = subprocess.Popen(c.host_args(settings, resolve(settings)), env=env,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    stopping = False
     def stop(*_):
+        nonlocal stopping
+        stopping = True
         if child.poll() is None:
             child.send_signal(signal.SIGINT)
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
     for line in child.stdout:
         print(line.replace(token, '[session]'), end='', flush=True)
-    return child.wait()
+    code = child.wait()
+    return 0 if stopping and code in (0, -signal.SIGINT, -signal.SIGTERM) else code

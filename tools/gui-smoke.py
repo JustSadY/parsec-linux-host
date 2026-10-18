@@ -20,9 +20,13 @@ resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 parser = argparse.ArgumentParser()
 parser.add_argument('module', type=Path)
 parser.add_argument('--online', action='store_true', help='Allow the vendor client to use its existing login online')
+parser.add_argument('--native-host', action='store_true', help='Attach the read-only native Host controller test')
+parser.add_argument('--helper', help='Read-only status helper override for migration tests')
+parser.add_argument('--debug', action='store_true', help='Collect a bounded crash backtrace for this disposable test')
+parser.add_argument('--control-file', type=Path, help='Read private test commands from an append-only file')
 args = parser.parse_args()
-root = Path(__file__).resolve().parents[2]
-lab = root / '.cache/native-patch'
+root = Path(__file__).resolve().parents[1]
+lab = root / '.cache/gui-test'
 lab.mkdir(parents=True, exist_ok=True)
 profile = Path.home() / '.parsec'
 module = args.module.resolve(strict=True)
@@ -43,6 +47,7 @@ server = subprocess.Popen(['Xvfb', name, '-screen', '0', '1440x1000x24',
     '-nolisten', 'tcp', '-auth', str(auth)], stdout=xlog, stderr=subprocess.STDOUT)
 client = None
 connection = None
+bridge = None
 try:
     for _ in range(30):
         if Path(f'/tmp/.X11-unix/X{number}').exists():
@@ -58,9 +63,22 @@ try:
         '--setenv', 'USER', os.environ.get('USER', ''), '--setenv', 'LANG', 'C.UTF-8',
         '--setenv', 'DISPLAY', name, '--setenv', 'XAUTHORITY', str(auth),
         '--setenv', 'XDG_RUNTIME_DIR', '/tmp/runtime', '--setenv', 'XDG_SESSION_TYPE', 'x11',
-        '--setenv', 'LIBGL_ALWAYS_SOFTWARE', '1', '--die-with-parent', '--',
-        '/usr/bin/parsecd', 'app_host=0:app_log_level=3:client_renderer=0']
-    client = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
+        '--setenv', 'LIBGL_ALWAYS_SOFTWARE', '1']
+    if args.native_host:
+        sys.path.insert(0, str(root / 'app'))
+        from parsec_host.bridge import NativeBridge
+        bridge = NativeBridge(read_only=True, helper=args.helper).__enter__()
+        command += ['--bind', str(bridge.path), str(bridge.path),
+            '--setenv', 'PARSEC_NATIVE_HOST_BRIDGE', str(bridge.path)]
+    command += ['--die-with-parent', '--']
+    if args.debug:
+        command += ['gdb', '--batch', '-ex', 'set pagination off', '-ex', 'set print frame-arguments none',
+            '-ex', 'run', '-ex', 'bt 12', '-ex', 'info registers rip rsp rdi rsi rdx',
+            '-ex', 'x/6i $pc', '-ex', 'info sharedlibrary parsecd', '--args']
+    vendor = Path('/usr/lib/parsec-linux-host/vendor/parsecd')
+    command += [str(vendor if vendor.exists() else '/usr/bin/parsecd'), 'app_host=0:app_log_level=3:client_renderer=0']
+    client = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log,
+                              stderr=subprocess.STDOUT, start_new_session=True)
     os.environ['DISPLAY'], os.environ['XAUTHORITY'] = name, str(auth)
     from Xlib import X, display
     from Xlib.ext import xtest
@@ -83,7 +101,19 @@ try:
     time.sleep(6)
     snapshot('initial')
     print('READY: click X Y, shot LABEL, or quit (private Xvfb display only)', flush=True)
-    for line in sys.stdin:
+    def commands():
+        if not args.control_file:
+            yield from sys.stdin
+            return
+        args.control_file.touch(mode=0o600, exist_ok=True)
+        with args.control_file.open() as control:
+            while True:
+                line = control.readline()
+                if line:
+                    yield line
+                else:
+                    time.sleep(.1)
+    for line in commands():
         parts = line.split()
         if not parts:
             continue
@@ -101,6 +131,18 @@ try:
             snapshot('clicked')
         elif parts[0] == 'shot' and len(parts) == 2 and parts[1].isalnum():
             snapshot(parts[1])
+        elif parts[0] == 'scroll' and len(parts) == 2:
+            amount = max(-20, min(20, int(parts[1])))
+            for _ in range(abs(amount)):
+                xtest.fake_input(connection, X.ButtonPress, 5 if amount > 0 else 4)
+                xtest.fake_input(connection, X.ButtonRelease, 5 if amount > 0 else 4)
+            connection.sync()
+            time.sleep(.5)
+            snapshot('scrolled')
+        elif parts[0] == 'bridge' and bridge:
+            print(json.dumps(dict(status=bridge.state.status.decode(),
+                actions=bridge.actions, seq=bridge.state.seq, ack=bridge.state.ack,
+                fps=bridge.state.fps, bitrate=bridge.state.bitrate)), flush=True)
 finally:
     if connection:
         connection.close()
@@ -120,3 +162,5 @@ finally:
     log.close()
     xlog.close()
     auth.unlink(missing_ok=True)
+    if bridge:
+        bridge.__exit__(None, None, None)

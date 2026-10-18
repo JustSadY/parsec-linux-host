@@ -6,6 +6,12 @@
     "checked": "2026-10-18",
     "observed_auto_update_module": "150-105c"
   },
+  "native_module": {
+    "version": "150-105c",
+    "url": "https://builds.parsec.app/channel/release/binary/linux/gz/parsecd-150-105c.so",
+    "sha256": "10af623d573b566bfd3f9a5c36a509001e02be3da5a60e0f2e0f6920cb6eb983",
+    "checked": "2026-10-18"
+  },
   "lowlat": {
     "commit": "1d2bb76d3cab31ab73dbd88ca07d2e071683a7bb",
     "url": "https://codeload.github.com/nomi-san/lowlat/tar.gz/1d2bb76d3cab31ab73dbd88ca07d2e071683a7bb",

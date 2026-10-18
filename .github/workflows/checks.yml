@@ -6,6 +6,7 @@ jobs:
     container: archlinux:base-devel
     steps:
       - uses: actions/checkout@v4
-      - run: pacman -Syu --noconfirm python pyside6 python-xlib
+      - run: pacman -Syu --noconfirm python
       - run: make test
+      - run: make native
       - run: bash -n PKGBUILD packaging/*.install packaging/parsecd

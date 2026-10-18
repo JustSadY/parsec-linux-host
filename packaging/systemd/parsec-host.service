@@ -17,7 +17,9 @@ ExecStart=/usr/lib/parsec-linux-host/service
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=20
-KillMode=control-group
+# Let the runner forward SIGINT; SIGTERM to the whole group made normal stops
+# look like exit 241. systemd still kills the whole group on stop timeout.
+KillMode=mixed
 CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH
 NoNewPrivileges=yes
 RuntimeDirectory=parsec-host
