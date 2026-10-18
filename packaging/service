@@ -1,5 +1,0 @@
-#!/usr/bin/python3 -I
-import sys
-sys.path.insert(0, '/usr/lib/parsec-linux-host')
-from parsec_host.runner import main
-raise SystemExit(main())

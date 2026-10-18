@@ -11,14 +11,16 @@ license=('MIT' 'LicenseRef-Parsec')
 # The vendor ELF has added PT_LOADs; stripping its old section table can discard
 # the native UI payload and invalidate appdata.json. Preserve exact ELF bytes.
 options=('!lto' '!strip')
-depends=('glibc' 'gcc-libs' 'systemd' 'polkit' 'python' 'bubblewrap'
+depends=('glibc' 'gcc-libs' 'systemd' 'polkit' 'bubblewrap' 'jansson'
          'libx11' 'libxcursor' 'libxi' 'libsm' 'libglvnd' 'alsa-lib' 'libjpeg-turbo'
          'libpng' 'curl' 'openssl' 'ffmpeg' 'vulkan-icd-loader' 'libva' 'libpulse')
-makedepends=('cargo' 'patch' 'gcc' 'binutils')
+makedepends=('cargo' 'patch' 'gcc' 'binutils' 'python' 'pkgconf' 'jansson')
 optdepends=('nvidia-utils: NVIDIA NVENC encoding'
             'mesa: OpenGL conversion and AMD/Intel graphics'
             'vulkan-radeon: AMD Vulkan capture conversion'
-            'vulkan-intel: Intel Vulkan capture conversion')
+            'vulkan-intel: Intel Vulkan capture conversion'
+            'wl-clipboard: copy the friend invite link on Wayland'
+            'xclip: copy the friend invite link on X11')
 provides=('parsec-bin=150_105c')
 conflicts=('parsec-bin' 'parsec')
 backup=('etc/parsec-host/settings.json')
@@ -31,7 +33,7 @@ source=("$pkgname-$pkgver.tar.gz"
         "parsec-linux-$_parsecver.deb::https://builds.parsec.app/package/parsec-linux.deb"
         "parsecd-$_modulever.so::https://builds.parsec.app/channel/release/binary/linux/gz/parsecd-$_modulever.so")
 noextract=("parsec-linux-$_parsecver.deb" "parsecd-$_modulever.so")
-sha256sums=('49db218bd7ea65921cba3cb144e7740ad762837d0dc5695f05fad578e6c25241'
+sha256sums=('5011bb45430f9e7f1ef8d5e5f1d17b8554c4645c8edfb70c3804fc9733dff710'
             'e30b4af9f4030b698bd814588fa5e8c3687b12efe823fb47f1ab78c1eb1bb55d'
             'c8a4407713d72dcb1c59f082977e81e1b9e8ffd679d0666882cde4c8a0821dd2'
             '10af623d573b566bfd3f9a5c36a509001e02be3da5a60e0f2e0f6920cb6eb983')
@@ -40,6 +42,8 @@ prepare() {
     cd "$srcdir/lowlat-$_lowlat"
     patch -Np1 -i "$srcdir/$pkgname-$pkgver/patches/0001-local-owner-access.patch"
     patch -Np1 -i "$srcdir/$pkgname-$pkgver/patches/0002-probe-context-lifetime.patch"
+    patch -Np1 -i "$srcdir/$pkgname-$pkgver/patches/0003-advertise-share-secret.patch"
+    patch -Np1 -i "$srcdir/$pkgname-$pkgver/patches/0004-refuse-same-machine-guest.patch"
     mkdir -p "$srcdir/vendor-deb"
     bsdtar -xf "$srcdir/parsec-linux-$_parsecver.deb" -C "$srcdir/vendor-deb"
     bsdtar -xf "$srcdir/vendor-deb/data.tar.zst" -C "$srcdir/vendor-deb"
@@ -48,6 +52,7 @@ prepare() {
 build() {
     python "$srcdir/$pkgname-$pkgver/tools/build-native.py" \
         --module "$srcdir/parsecd-$_modulever.so" --output "$srcdir/native-build"
+    make -C "$srcdir/$pkgname-$pkgver/runtime" OUT="$srcdir/runtime-build" all
     cd "$srcdir/lowlat-$_lowlat"
     # A distributable x86_64 build must not inherit CachyOS target-cpu=native.
     export RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=x86-64"
@@ -59,9 +64,7 @@ build() {
 check() {
     export RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=x86-64"
     export CFLAGS="${CFLAGS:-} -march=x86-64 -mtune=generic"
-    cd "$srcdir/$pkgname-$pkgver"
-    PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=app \
-        python -m unittest discover -s tests -v
+    make -C "$srcdir/$pkgname-$pkgver/runtime" OUT="$srcdir/runtime-build" test
     cd "$srcdir/lowlat-$_lowlat"
     CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$srcdir/target}" \
         cargo test --locked -p lowlatd --bin lowlatd
@@ -73,11 +76,9 @@ package() {
     local project="$srcdir/$pkgname-$pkgver"
     local lib="$pkgdir/usr/lib/$pkgname"
     install -d "$lib/vendor" "$pkgdir/usr/bin" "$pkgdir/etc/parsec-host"
-    cp -r "$project/app/parsec_host" "$lib/"
-    find "$lib" -type d -name __pycache__ -prune -exec rm -rf {} +
     install -m755 "${CARGO_TARGET_DIR:-$srcdir/target}/release/lowlatd" "$lib/lowlatd"
-    install -m755 "$project/packaging/hostctl" "$project/packaging/service" "$lib/"
-    install -m755 "$project/packaging/launch" "$pkgdir/usr/bin/parsec-linux-host"
+    install -m755 "$srcdir/runtime-build/hostctl" "$srcdir/runtime-build/service-runner" "$lib/"
+    install -m755 "$srcdir/runtime-build/parsec-linux-host" "$pkgdir/usr/bin/parsec-linux-host"
     install -m755 "$project/packaging/parsecd" "$pkgdir/usr/bin/parsecd"
     install -m755 "$srcdir/vendor-deb/usr/bin/parsecd" "$lib/vendor/parsecd"
     install -m644 "$srcdir/native-build/parsecd-$_modulever.so" \

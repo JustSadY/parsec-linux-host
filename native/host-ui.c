@@ -25,7 +25,7 @@ extern unsigned char *ui_context;
 #pragma GCC visibility pop
 
 /* Shared only with our unprivileged launcher. No account/session data. */
-_Static_assert(sizeof(struct Bridge) == 1580, "bridge ABI");
+_Static_assert(sizeof(struct Bridge) == 1840, "bridge ABI");
 static struct Bridge *bridge;
 static int attempted;
 
@@ -206,9 +206,28 @@ void host_page(float width, void *context) {
     b->clipboard = !!b->clipboard;
     combo("", &b->clipboard, (const char *const *)booleans, 2, -1);
     finish(width, padding);
-    gap(15);
-    if (button(0, "Save settings", b->busy)) request(b, 1);
-    same_line(0, vendor_roundf(scale() * 20));
-    if (button(0, "Refresh status", b->busy)) request(b, 4);
+
+    /* No Save button: the launcher autosaves edited settings and refreshes
+     * status on its own. Friend sharing is the only explicit action left. */
+    b->share_link[255] = 0;
+    padding = row(width, "Friend Access",
+        "Create an invite link so a friend can connect to this computer.");
+    if (b->share_enabled) {
+        if (button(0, "Stop sharing", b->busy || !b->configured)) request(b, 7);
+    } else if (button(0, "Create share link", b->busy || !b->configured)) {
+        request(b, 6);
+    }
+    finish(width, padding);
+    if (b->share_enabled) {
+        if (b->share_link[0]) {
+            text(b->share_link, 0);
+            gap(6);
+            if (button(0, "Copy link", b->busy)) request(b, 8);
+        } else {
+            text("Invite link not ready. Start hosting, then get the link.", 0);
+            gap(6);
+            if (button(0, "Get link", b->busy || !b->configured)) request(b, 9);
+        }
+    }
     gap(20);
 }

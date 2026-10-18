@@ -25,9 +25,20 @@ profilin korunur; proje kodu buradaki kimlik bilgilerini okumaz veya kopyalamaz.
 
 Host sayfasında isim, ekran, GPU, NVENC/VA-API, Vulkan/OpenGL dönüşümü, FPS,
 bant genişliği, codec, kalite, sabit FPS, hoparlör susturma, pano paylaşımı ve
-boot başlangıcı bulunur. **Save settings** kaydeder; değişiklikleri uygulamak
-için **Stop hosting → Start hosting** yap. Yönetim işlemleri Polkit ile Linux
-yönetici doğrulaması ister. Pencereyi kapatmak host servisini durdurmaz.
+boot başlangıcı bulunur. Değişiklikler **otomatik kaydedilir** (ayrı bir Kaydet
+düğmesi yoktur); uygulamak için **Stop hosting → Start hosting** yap.
+
+Arkadaşını davet etmek için **Friend Access → Create share link**: bir
+`https://parsec.gg/g/...` davet linki üretilip panoya kopyalanır. Link, host'u
+yalnız o linke sahip misafirin bağlanabileceği davetli moduna alır; **Copy
+link** yeniden kopyalar, **Stop sharing** kapatır. Kendi bilgisayarına "Connect"
+ile bağlanmaya gerek yoktur — paylaşım bu link iledir. Aynı bilgisayardan
+kendi host'una bağlanma denemesi (ekranı kendine yansıtan döngü) host tarafında
+reddedilir ve günlüğe yazılır; Computers listesindeki kart yine **Connect**
+gösterir, ama bağlantı kurulmaz.
+
+Yönetim işlemleri Polkit ile Linux yönetici doğrulaması ister. Pencereyi
+kapatmak host servisini durdurmaz.
 
 GPU PCI adresiyle saklanır. `card0/card1` sırası çalışma anında çözülür; VFIO
 kartları listelenmez. Seçilen GPU'ya bağlı ekran gerekir. Sürücüler, VFIO,
@@ -50,8 +61,10 @@ edilmiş vendor kaynak depoya eklenmez.
 
 Yeni kurulum varsayılanları: hosting/boot kapalı; 60 FPS, 10 Mbps, H.264, en düşük
 gecikme, otomatik GPU/encoder, mevcut ekran modu, hoparlör susturma ve pano metin
-paylaşımı açık. İsim boşsa sistem adı kullanılır. Yalnız hesap sahibi bağlanabilir;
-eşzamanlı istemci sayısı birdir. FPS bir sınırdır, ölçülmüş sonuç veya ekran Hz ayarı değildir.
+paylaşımı açık; arkadaş paylaşımı kapalıdır. Paylaşım kapalıyken yalnız hesap
+sahibi bağlanabilir; davet linki açıkken linke sahip bir misafir de bağlanabilir.
+Eşzamanlı istemci sayısı birdir. İsim boşsa sistem adı kullanılır. FPS bir
+sınırdır, ölçülmüş sonuç veya ekran Hz ayarı değildir.
 
 Boot hosting için **Start at Boot** seçeneğine ek olarak:
 
@@ -82,9 +95,10 @@ comes from the separately pinned 150-104a installer; see `upstream.json`.
 
 The C payload uses observed private function RVAs. Two exact sites add the Host
 tab and its real controls. Code is RX; mutable state is in a separate RW segment.
-The vendor host-start stub and capability response remain unchanged. A Python
-worker manages public settings and fixed helper actions; it does not render the
-page or implement streaming. The launcher pins the module using bubblewrap.
+The vendor host-start stub and capability response remain unchanged. A compiled
+C worker manages public settings, friend invite sharing and fixed helper
+actions; it does not render the page or implement streaming. The launcher pins
+the module using bubblewrap.
 Profile settings persist; module auto-updates remain pinned until a compatible
 package is built. This launch is not advertised as a security sandbox.
 

@@ -1,0 +1,38 @@
+#include "runtime.h"
+#include <dirent.h>
+#include <regex.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static int matches(const char *s,const char *pattern){regex_t r;if(regcomp(&r,pattern,REG_EXTENDED|REG_NOSUB))return 0;int ok=!regexec(&r,s,0,NULL,0);regfree(&r);return ok;}
+static int read_text(const char *path,char *out,size_t cap){FILE *f=fopen(path,"re");if(!f)return -1;if(!fgets(out,(int)cap,f)){fclose(f);return -1;}fclose(f);out[strcspn(out,"\r\n")]=0;return 0;}
+static const char *basename_const(const char *p){const char *s=strrchr(p,'/');return s?s+1:p;}
+json_t *ph_inventory(const char *root,ph_error *e){
+    (void)e;json_t *devices=json_array();struct dirent **items=NULL;int count=scandir(root,&items,NULL,alphasort);if(count<0)return devices;
+    for(int i=0;i<count;i++){
+        const char *card=items[i]->d_name;if(!matches(card,"^card[0-9]+$"))continue;
+        char path[PATH_MAX],dev[PATH_MAX],driverpath[PATH_MAX],driverreal[PATH_MAX],vendor[32],ident[32];
+        snprintf(path,sizeof path,"%s/%s/device",root,card);if(!realpath(path,dev))continue;
+        const char *pci=basename_const(dev);if(!matches(pci,"^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]$"))continue;
+        ph_path(driverpath,sizeof driverpath,dev,"driver");if(!realpath(driverpath,driverreal))continue;const char *driver=basename_const(driverreal);
+        if(strcmp(driver,"nvidia")&&strcmp(driver,"amdgpu")&&strcmp(driver,"i915")&&strcmp(driver,"xe")&&strcmp(driver,"nouveau"))continue;
+        ph_path(path,sizeof path,dev,"vendor");if(read_text(path,vendor,sizeof vendor))continue;ph_path(path,sizeof path,dev,"device");if(read_text(path,ident,sizeof ident))continue;
+        const char *v=!strncmp(vendor,"0x",2)?vendor+2:vendor,*id=!strncmp(ident,"0x",2)?ident+2:ident;
+        if(!matches(v,"^[0-9a-f]{4}$")||!matches(id,"^[0-9a-f]{4}$"))continue;
+        json_t *outputs=json_array();size_t prefix=strlen(card);
+        for(int j=0;j<count;j++){const char *connector=items[j]->d_name;if(strncmp(connector,card,prefix)||connector[prefix]!='-')continue;snprintf(path,sizeof path,"%s/%s/status",root,connector);char status[40];if(!read_text(path,status,sizeof status)&&!strcmp(status,"connected"))json_array_append_new(outputs,json_string(connector+prefix+1));}
+        const char *brand=!strcmp(v,"10de")?"NVIDIA":!strcmp(v,"1002")?"AMD":!strcmp(v,"8086")?"Intel":v;char label[128];snprintf(label,sizeof label,"%s [%s] · %s",brand,id,pci);
+        json_t *d=json_pack("{s:s,s:s,s:s,s:s,s:s,s:o}","pci",pci,"card",card,"vendor",v,"driver",driver,"label",label,"outputs",outputs);json_array_append_new(devices,d);
+    }
+    for(int i=0;i<count;i++)free(items[i]);free(items);return devices;
+}
+json_t *ph_resolve(json_t *s,json_t *devices,ph_error *e){
+    const char *gpu=json_string_value(json_object_get(s,"gpu")),*output=json_string_value(json_object_get(s,"output"));if(!gpu||!output||!json_is_array(devices)){ph_fail(e,"Invalid GPU selection");return NULL;}
+    json_t *best=NULL,*d;size_t i;
+    json_array_foreach(devices,i,d){const char *pci=json_string_value(json_object_get(d,"pci"));json_t *outputs=json_object_get(d,"outputs");if(!pci||!json_is_array(outputs)||!json_array_size(outputs)|| (strcmp(gpu,"auto")&&strcmp(gpu,pci)))continue;
+        if(strcmp(output,"auto")){int found=0;size_t j;json_t *o;json_array_foreach(outputs,j,o){const char *v=json_string_value(o);if(v&&!strcmp(v,output))found=1;}if(!found)continue;}
+        if(!best||strcmp(pci,json_string_value(json_object_get(best,"pci")))<0)best=d;
+    }
+    if(!best)ph_fail(e,"No connected display on the selected GPU; VFIO devices are excluded");return best?json_incref(best):NULL;
+}

@@ -1,14 +1,18 @@
-.PHONY: source test native run package srcinfo
+.PHONY: source test runtime native run package srcinfo clean
 source:
 	python3 tools/prepare-source.py
-test:
-	PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=app python3 -m unittest discover -s tests -v
+runtime:
+	$(MAKE) -C runtime all
+test: runtime
+	$(MAKE) -C runtime test
 native:
 	python3 tools/fetch-module.py
 	python3 tools/build-native.py --module .cache/vendor/parsecd-150-105c.so --output .cache/native
-run: native
-	PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=app python3 tools/run-native.py
+run: native runtime
+	bash tools/run-native.sh
 package: source
 	makepkg --force
 srcinfo: source
 	makepkg --printsrcinfo > .SRCINFO
+clean:
+	$(MAKE) -C runtime clean

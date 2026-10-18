@@ -1,8 +1,10 @@
 #!/usr/bin/python3 -I
-"""One-time removal of the older manual installation, preserving its account.
+"""One-time removal of an older manual installation, preserving its account.
 
 Run only after installing the new package. Copies private session bytes without
-printing or parsing them. No third-party application/profile is removed.
+printing or parsing them, then removes the legacy application, helper, units and
+policy. No third-party application or profile is touched. The new root helper
+validates the copied settings on the next save or start.
 """
 import argparse
 import datetime
@@ -13,7 +15,21 @@ import pwd
 import shutil
 import stat
 import subprocess
-import sys
+
+ETC = Path('/etc/parsec-host')
+
+
+def atomic(path, data, mode=0o644):
+    fd, name = __import__('tempfile').mkstemp(dir=path.parent, prefix='.new-')
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, 'w') as f:
+            json.dump(data, f, ensure_ascii=False)
+            f.write('\n')
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
 
 
 def main():
@@ -22,25 +38,23 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--uid', required=True, type=int)
     args = parser.parse_args()
-    user = pwd.getpwuid(args.uid)
     if args.uid < 1000:
         raise SystemExit('A desktop user UID is required.')
+    user = pwd.getpwuid(args.uid)
     lib = Path('/usr/lib/parsec-linux-host')
     if not (lib / 'vendor/appdata.json').is_file() or not (lib / 'hostctl').is_file():
         raise SystemExit('Install the native Host package first.')
     if lib.stat().st_uid or lib.stat().st_mode & 0o022:
         raise SystemExit('Installed package directory must be root-owned and not writable by others.')
-    sys.path.insert(0, str(lib))
-    from parsec_host import config as c, control
     old = Path('/etc/parsec-linux-host')
     if old.exists():
         if old.is_symlink() or old.stat().st_uid:
             raise SystemExit('Unexpected legacy configuration ownership.')
         try:
-            existing_owner = control.owner()
-        except FileNotFoundError:
-            existing_owner = None
-        if existing_owner and existing_owner['uid'] != args.uid:
+            existing = json.loads((ETC / 'owner.json').read_text())
+        except (OSError, ValueError):
+            existing = None
+        if existing and existing.get('uid') != args.uid:
             raise SystemExit('The destination host belongs to another account.')
         backup = Path('/var/lib/parsec-host') / ('legacy-config-' + datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))
         backup.mkdir(parents=True, mode=0o700)
@@ -54,19 +68,17 @@ def main():
                 raise SystemExit('Unexpected legacy file ownership/type.')
             shutil.copyfile(source, backup / name)
             (backup / name).chmod(0o600)
-        c.ETC.mkdir(parents=True, exist_ok=True)
-        account = old / 'account.json'
-        if account.exists() and not (c.ETC / 'account.json').exists():
-            shutil.copyfile(account, c.ETC / 'account.json')
-            (c.ETC / 'account.json').chmod(0o600)
+        ETC.mkdir(parents=True, exist_ok=True)
+        if (old / 'account.json').exists() and not (ETC / 'account.json').exists():
+            shutil.copyfile(old / 'account.json', ETC / 'account.json')
+            (ETC / 'account.json').chmod(0o600)
             if (old / 'account-info.json').exists():
-                shutil.copyfile(old / 'account-info.json', c.ETC / 'account-info.json')
-                (c.ETC / 'account-info.json').chmod(0o644)
-        previous = json.loads((old / 'settings.json').read_text()) if (old / 'settings.json').exists() else {}
-        migrated = c.validate({**c.DEFAULT, **previous, 'gpu': '0000:01:00.0',
-            'encoder': 'nvenc', 'mute_speakers': False, 'clipboard': False})
-        control.atomic(c.ETC / 'settings.json', migrated)
-        control.atomic(c.ETC / 'owner.json', dict(uid=args.uid, gid=user.pw_gid))
+                shutil.copyfile(old / 'account-info.json', ETC / 'account-info.json')
+                (ETC / 'account-info.json').chmod(0o644)
+        if (old / 'settings.json').exists() and not (ETC / 'settings.json').exists():
+            shutil.copyfile(old / 'settings.json', ETC / 'settings.json')
+            (ETC / 'settings.json').chmod(0o644)
+        atomic(ETC / 'owner.json', dict(uid=args.uid, gid=user.pw_gid))
         dropin = Path('/etc/systemd/system/parsec-host.service.d')
         dropin.mkdir(parents=True, exist_ok=True)
         (dropin / 'owner.conf').write_text(f'[Service]\nGroup={user.pw_gid}\n')

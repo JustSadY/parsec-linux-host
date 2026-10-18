@@ -1,0 +1,172 @@
+Refuse a guest that connects from the host's own computer.
+
+A client on the same computer that connects to its own host streams the
+desktop back into itself, input included. The established path is the
+address that answered the connectivity check with the attempt's
+credentials, so when it is one of this computer's interface addresses (or
+loopback) the attempt is ended and logged. Candidate addresses alone are
+not trusted, because container bridges and virtual networks repeat across
+computers. A peer that is not recognised is admitted as before.
+
+diff --git a/crates/daemon/src/main.rs b/crates/daemon/src/main.rs
+index 1b1d3f8..5d0b882 100644
+--- a/crates/daemon/src/main.rs
++++ b/crates/daemon/src/main.rs
+@@ -20,6 +20,7 @@ mod channel;
+ #[cfg(target_os = "linux")]
+ mod dbus;
+ mod display;
++mod same_machine;
+ #[cfg(target_os = "linux")]
+ mod seat;
+ mod service;
+diff --git a/crates/daemon/src/same_machine.rs b/crates/daemon/src/same_machine.rs
+new file mode 100644
+index 0000000..c3da86f
+--- /dev/null
++++ b/crates/daemon/src/same_machine.rs
+@@ -0,0 +1,114 @@
++//! Refusing a guest that is this computer.
++//!
++//! A client on the host's own computer that connects to it streams the desktop
++//! back into itself, input included. That is never what an owner meant: from
++//! this computer the host is shared with an invite link, not connected to.
++//!
++//! **Decided on the established path, not on the candidates.** A candidate
++//! address another computer also holds -- a container bridge's, a virtual
++//! network's default -- says nothing on its own. The path is the address that
++//! answered the connectivity check with this attempt's credentials, so when that
++//! address is one of this computer's own, the guest is on this computer.
++//!
++//! **Fails open.** A peer that hides its addresses and meets the host through a
++//! translator's mapping is not recognised, and is admitted as before.
++use std::net::IpAddr;
++
++/// Whether the established path leads back to this computer.
++pub(crate) fn is_local_path(path: IpAddr, local: &[IpAddr]) -> bool {
++    let path = canonical(path);
++    path.is_loopback() || local.iter().any(|ip| canonical(*ip) == path)
++}
++
++/// An IPv4 address carried in IPv6 compares as the IPv4 address it is.
++fn canonical(ip: IpAddr) -> IpAddr {
++    match ip {
++        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),
++        IpAddr::V4(_) => ip,
++    }
++}
++
++/// Every address on an interface that is up, both families.
++#[cfg(target_os = "linux")]
++pub(crate) fn local_addresses() -> Vec<IpAddr> {
++    let mut list: *mut libc::ifaddrs = core::ptr::null_mut();
++    // SAFETY: getifaddrs writes one pointer to a list it allocates and owns.
++    // A failure leaves nothing to release.
++    if unsafe { libc::getifaddrs(&raw mut list) } != 0 {
++        return Vec::new();
++    }
++    let mut found = Vec::new();
++    let mut node = list;
++    while !node.is_null() {
++        // SAFETY: the walk stops at null, so this is a node getifaddrs built,
++        // and the list stays alive until freeifaddrs below.
++        let entry = unsafe { &*node };
++        node = entry.ifa_next;
++        if entry.ifa_addr.is_null() || entry.ifa_flags & (libc::IFF_UP as u32) == 0 {
++            continue;
++        }
++        // SAFETY: a non-null ifa_addr points at a sockaddr, and the family
++        // field is present for every family.
++        match i32::from(unsafe { (*entry.ifa_addr).sa_family }) {
++            libc::AF_INET => {
++                // SAFETY: the family says AF_INET, so this is a sockaddr_in.
++                let sin = unsafe { &*entry.ifa_addr.cast::<libc::sockaddr_in>() };
++                found.push(IpAddr::from(u32::from_be(sin.sin_addr.s_addr).to_be_bytes()));
++            }
++            libc::AF_INET6 => {
++                // SAFETY: the family says AF_INET6, so this is a sockaddr_in6.
++                let sin6 = unsafe { &*entry.ifa_addr.cast::<libc::sockaddr_in6>() };
++                found.push(IpAddr::from(sin6.sin6_addr.s6_addr));
++            }
++            _ => {}
++        }
++    }
++    // SAFETY: `list` came from the successful getifaddrs above, has not been
++    // released, and the walk copied out of it rather than keeping pointers in.
++    unsafe { libc::freeifaddrs(list) };
++    found
++}
++
++/// Elsewhere only the loopback check applies.
++#[cfg(not(target_os = "linux"))]
++pub(crate) fn local_addresses() -> Vec<IpAddr> {
++    Vec::new()
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn ip(text: &str) -> IpAddr {
++        text.parse().expect("an address")
++    }
++
++    #[test]
++    fn a_path_to_one_of_this_computers_addresses_is_this_computer() {
++        let local = [ip("192.168.1.10"), ip("172.17.0.1"), ip("fd00::10")];
++        assert!(is_local_path(ip("192.168.1.10"), &local));
++        assert!(is_local_path(ip("fd00::10"), &local));
++        assert!(is_local_path(ip("::ffff:192.168.1.10"), &local));
++    }
++
++    #[test]
++    fn loopback_is_always_this_computer() {
++        assert!(is_local_path(ip("127.0.0.1"), &[]));
++        assert!(is_local_path(ip("::1"), &[]));
++    }
++
++    #[test]
++    fn another_computer_on_the_same_network_is_admitted() {
++        let local = [ip("192.168.1.10"), ip("172.17.0.1")];
++        assert!(!is_local_path(ip("192.168.1.20"), &local));
++        assert!(!is_local_path(ip("203.0.113.7"), &local));
++        assert!(!is_local_path(ip("::ffff:192.168.1.20"), &local));
++    }
++
++    #[cfg(target_os = "linux")]
++    #[test]
++    fn the_interface_walk_lists_addresses_without_failing() {
++        // Contents depend on the machine; the walk itself must not fail.
++        let _ = local_addresses();
++    }
++}
+diff --git a/crates/daemon/src/service.rs b/crates/daemon/src/service.rs
+index 6669455..7e69c77 100644
+--- a/crates/daemon/src/service.rs
++++ b/crates/daemon/src/service.rs
+@@ -1089,6 +1089,25 @@ async fn session_loop(
+                 }
+                 Event::Established { attempt, addr } => {
+                     lowlat_common::log_info!("lowlatd: established {attempt} over {addr}");
++                    // A client on this very computer would stream the desktop
++                    // back into itself; this computer shares with an invite
++                    // link instead (same_machine.rs).
++                    if crate::same_machine::is_local_path(
++                        addr.ip(),
++                        &crate::same_machine::local_addresses(),
++                    ) {
++                        lowlat_common::log_warn!(
++                            "lowlatd: refused {attempt}, it connects from this computer; \
++                             share this computer with an invite link instead"
++                        );
++                        seam.end_connection(&attempt);
++                        peers.remove(&attempt);
++                        client.send(
++                            "conn_update",
++                            &advertisement(name, capacity, occupancy(seam)),
++                        )?;
++                        continue;
++                    }
+                     established.insert(attempt.clone());
+                     // **Everyone is told, not just the arrival.** The room the
+                     // others are in changed too, and a guest that joined

@@ -6,7 +6,7 @@ jobs:
     container: archlinux:base-devel
     steps:
       - uses: actions/checkout@v4
-      - run: pacman -Syu --noconfirm python
+      - run: pacman -Syu --noconfirm python jansson curl openssl systemd-libs pkgconf
       - run: make test
       - run: make native
-      - run: bash -n PKGBUILD packaging/*.install packaging/parsecd
+      - run: bash -n PKGBUILD packaging/*.install packaging/parsecd tools/run-native.sh

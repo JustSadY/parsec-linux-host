@@ -65,11 +65,10 @@ try:
         '--setenv', 'XDG_RUNTIME_DIR', '/tmp/runtime', '--setenv', 'XDG_SESSION_TYPE', 'x11',
         '--setenv', 'LIBGL_ALWAYS_SOFTWARE', '1']
     if args.native_host:
-        sys.path.insert(0, str(root / 'app'))
-        from parsec_host.bridge import NativeBridge
-        bridge = NativeBridge(read_only=True, helper=args.helper).__enter__()
-        command += ['--bind', str(bridge.path), str(bridge.path),
-            '--setenv', 'PARSEC_NATIVE_HOST_BRIDGE', str(bridge.path)]
+        # The native Host bridge now lives in the compiled launcher; this bare
+        # vendor harness no longer drives it. Use the read-only launcher path.
+        print('For the native Host bridge use: parsec-linux-host open --read-only',
+              file=sys.stderr)
     command += ['--die-with-parent', '--']
     if args.debug:
         command += ['gdb', '--batch', '-ex', 'set pagination off', '-ex', 'set print frame-arguments none',
