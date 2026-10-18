@@ -33,10 +33,17 @@ experimental private-ABI integration.
 Native controls and an unprivileged C worker share a private 0600 runtime mmap in
 a 0700 directory. It holds public settings/status and bounded action sequences,
 never passwords or sessions. Allowed actions are save/start/stop/refresh/open-login
-and share/unshare/resolve-link/copy-link. Settings are validated in the worker and
+and share/unshare/resolve-link/copy-link/kick. Settings are validated in the worker and
 root-owned helper. Mutations use Polkit. Terminal login sends credentials over
 stdin and stores only the returned session, root-only. Runner output redacts it.
 Root does not execute user-writable project code.
+
+The worker also joins lowlatd's local session channel, `/run/parsec-host/session`,
+in its tray role: it reads the room (stream size, rate, codec and each guest's id,
+name, owner flag and connection state) and sends `{"kick": id}` for the page's
+Kick button. The socket is root's, 0660 to the owner's group, and lowlatd admits
+only the owner's uid; the worker in turn refuses a peer that is not root. No
+Polkit prompt is involved, and a read-only development run refuses the kick.
 
 Friend sharing stores only an invite secret and the resolved link in
 `/etc/parsec-host/share.json` (0644, no session). The secret is 128-bit random,

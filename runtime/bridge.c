@@ -55,6 +55,24 @@ static int save_snapshot(ph_bridge *w,json_t *form,ph_error *e){
     json_decref(w->settings);w->settings=json_incref(form);int restart=json_is_true(json_object_get(reply,"restart_required"));json_decref(reply);
     ph_bridge_message(w->state,restart?"Settings saved. Stop and start hosting to apply them.":"Settings saved.");return 0;
 }
+/* The room as the page draws it: titles stay unique per guest (the page keys
+ * its rows by them) and names are trimmed before formatting, so a cut never
+ * splits a UTF-8 sequence. NULL clears it. */
+void ph_bridge_publish_room(struct Bridge *b,const ph_room *room){
+    unsigned n=room?room->count:0;if(n>BRIDGE_GUESTS_MAX)n=BRIDGE_GUESTS_MAX;
+    for(unsigned i=0;i<n;i++){
+        const ph_guest *g=&room->guests[i];char name[64];utf8_copy(name,sizeof name,*g->name?g->name:"Guest");
+        snprintf(b->guest_titles[i],sizeof b->guest_titles[i],"%s (#%u)",name,(unsigned)g->id);
+        snprintf(b->guest_details[i],sizeof b->guest_details[i],"%s · %s",g->owner?"Your account":"Invited guest",g->connected?"connected":"connecting");
+        snprintf(b->guest_kick[i],sizeof b->guest_kick[i],"Kick##guest-%u",(unsigned)g->id);
+        b->guest_ids[i]=g->id;
+    }
+    b->guest_count=n;
+    if(room&&room->width&&room->height){
+        const char *codec=!strcmp(room->codec,"h265")?"H.265":!strcmp(room->codec,"h264")?"H.264":room->codec;
+        snprintf(b->stream,sizeof b->stream,"Streaming %ux%u · %u FPS · %u Mbps%s%s",room->width,room->height,room->fps,room->bitrate,*codec?" · ":"",codec);
+    } else b->stream[0]=0;
+}
 static void *worker(void *arg){
     ph_bridge *w=arg;struct Bridge *b=w->state;json_t *seen=NULL,*attempted=NULL;double changed=ph_now(),next_poll=ph_now()+2;int sticky=0;
     while(!w->stopped){
@@ -70,12 +88,20 @@ static void *worker(void *arg){
             else if(action==1){json_decref(attempted);attempted=form?json_incref(form):NULL;if(!form||save_snapshot(w,form,&e))sticky=1;else sticky=0;}
             else if(action==5){if(login_terminal(&e))sticky=1;else{ph_bridge_message(b,"Complete Host login in the terminal. Status updates automatically.");sticky=0;}}
             else if(action==2||action==3){json_t *reply=ph_helper_call(w->ctx,action==2?"start":"stop",NULL,1,&e);if(!reply)sticky=1;else{json_decref(reply);if(ph_bridge_refresh(w,0,0,&e))sticky=1;else sticky=0;}}
+            else if(action==10){if(ph_tray_kick(&w->tray,b->kick_guest,&e))sticky=1;else{ph_bridge_message(b,"Guest removed.");sticky=0;}}
             else if(action>=6){if(ph_bridge_extra_action(w,action,&e))sticky=1;else sticky=0;}
             else {ph_fail(&e,"Unknown native Host action");sticky=1;}
             if(*e.text)ph_bridge_message(b,e.text);__atomic_store_n(&b->ack,seq,__ATOMIC_RELEASE);b->busy=0;
         } else if(form&&!w->read_only&&!json_equal(form,w->settings)&&(!attempted||!json_equal(form,attempted))&&ph_now()-changed>=.75){
             b->busy=1;json_decref(attempted);attempted=json_incref(form);
             if(save_snapshot(w,form,&e)){ph_bridge_message(b,e.text);sticky=1;}else sticky=0;b->busy=0;
+        }
+        /* The live room, from lowlatd's own channel while hosting runs. */
+        if(b->running&&w->tray.fd<0&&ph_now()>=w->tray_retry){ph_error ignored={0};if(ph_tray_open(&w->tray,PH_SESSION_SOCKET,&ignored))w->tray_retry=ph_now()+3;}
+        if(w->tray.fd>=0){
+            ph_room room;int got=b->running?ph_tray_read(&w->tray,&room):-1;
+            if(got>0)ph_bridge_publish_room(b,&room);
+            else if(got<0){ph_tray_close(&w->tray);ph_bridge_publish_room(b,NULL);w->tray_retry=ph_now()+3;}
         }
         if(ph_now()>=next_poll&&!w->stopped){
             /* Poll only status. Never reload editable fields while the user types. */
@@ -86,7 +112,7 @@ static void *worker(void *arg){
     json_decref(seen);json_decref(attempted);return NULL;
 }
 int ph_bridge_start(ph_bridge *w,ph_context *c,int read_only,ph_error *e){
-    memset(w,0,sizeof *w);w->ctx=c;w->read_only=read_only;
+    memset(w,0,sizeof *w);w->ctx=c;w->read_only=read_only;ph_tray_init(&w->tray);
     const char *runtime=getenv("XDG_RUNTIME_DIR");char fallback[64];if(!runtime){snprintf(fallback,sizeof fallback,"/run/user/%u",(unsigned)getuid());runtime=fallback;}
     struct stat st;if(lstat(runtime,&st)||!S_ISDIR(st.st_mode)||st.st_uid!=getuid()||(st.st_mode&0077))return ph_fail(e,"A private desktop runtime directory is required");
     snprintf(w->directory,sizeof w->directory,"%s/parsec-native-host-XXXXXX",runtime);if(!mkdtemp(w->directory))return ph_fail(e,"Cannot create private Host bridge");
@@ -97,6 +123,6 @@ int ph_bridge_start(ph_bridge *w,ph_context *c,int read_only,ph_error *e){
     c->cancel=&w->stopped;if(ph_bridge_refresh(w,1,0,e))ph_bridge_message(w->state,e->text);
     if(pthread_create(&w->thread,NULL,worker,w)){ph_bridge_stop(w);return ph_fail(e,"Cannot start Host status worker");}w->started=1;return 0;
 }
-void ph_bridge_stop(ph_bridge *w){w->stopped=1;if(w->started)pthread_join(w->thread,NULL);w->started=0;if(w->ctx)w->ctx->cancel=NULL;if(w->state)munmap(w->state,sizeof(struct Bridge));w->state=NULL;json_decref(w->settings);w->settings=NULL;if(*w->path)unlink(w->path);if(*w->directory)rmdir(w->directory);}
+void ph_bridge_stop(ph_bridge *w){w->stopped=1;if(w->started)pthread_join(w->thread,NULL);w->started=0;ph_tray_close(&w->tray);if(w->ctx)w->ctx->cancel=NULL;if(w->state)munmap(w->state,sizeof(struct Bridge));w->state=NULL;json_decref(w->settings);w->settings=NULL;if(*w->path)unlink(w->path);if(*w->directory)rmdir(w->directory);}
 __attribute__((weak)) void ph_bridge_extra_refresh(struct Bridge *b,json_t *result){(void)b;(void)result;}
 __attribute__((weak)) int ph_bridge_extra_action(ph_bridge *w,unsigned action,ph_error *e){(void)w;(void)action;return ph_fail(e,"Unknown native Host action");}

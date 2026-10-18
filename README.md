@@ -28,6 +28,12 @@ bant genişliği, codec, kalite, sabit FPS, hoparlör susturma, pano paylaşım�
 boot başlangıcı bulunur. Değişiklikler **otomatik kaydedilir** (ayrı bir Kaydet
 düğmesi yoktur); uygulamak için **Stop hosting → Start hosting** yap.
 
+Hosting açıkken **Hosting Enabled** satırının altında canlı yayın bilgisi
+(çözünürlük, FPS, bitrate, codec) ve bağlı misafirler listelenir. Her misafirin
+yanında hesap türü (kendi hesabın / davetli) ve bağlantı durumu görünür;
+**Kick** o misafiri çıkarır. Liste lowlatd'nin yerel oturum kanalından okunur,
+yönetici doğrulaması istemez.
+
 Arkadaşını davet etmek için **Friend Access → Create share link**: bir
 `https://parsec.gg/g/...` davet linki üretilip panoya kopyalanır. Link, host'u
 yalnız o linke sahip misafirin bağlanabileceği davetli moduna alır; **Copy

@@ -48,6 +48,33 @@ int ph_hostctl_main(int, char **);
 int ph_runner_main(void);
 int ph_launcher_main(int, char **);
 
+/* lowlatd's local session channel in the tray role: the live room and kick.
+ * Frames are a little-endian u32 length and a JSON body. */
+#define PH_SESSION_SOCKET "/run/parsec-host/session"
+typedef struct {
+    uint32_t id;
+    int owner, connected;
+    char name[128];
+} ph_guest;
+typedef struct {
+    ph_guest guests[BRIDGE_GUESTS_MAX];
+    unsigned count, width, height, fps, bitrate;
+    char codec[8];
+} ph_room;
+typedef struct {
+    int fd;
+    unsigned char *buffer;
+    size_t used;
+} ph_tray;
+void ph_tray_init(ph_tray *);
+int ph_tray_open(ph_tray *, const char *path, ph_error *);
+int ph_tray_adopt(ph_tray *, int fd, ph_error *);
+int ph_tray_read(ph_tray *, ph_room *);
+int ph_tray_kick(ph_tray *, uint32_t guest, ph_error *);
+void ph_tray_close(ph_tray *);
+int ph_tray_parse_state(const char *body, size_t length, ph_room *);
+void ph_bridge_publish_room(struct Bridge *, const ph_room *);
+
 typedef struct {
     ph_context *ctx;
     struct Bridge *state;
@@ -56,6 +83,8 @@ typedef struct {
     volatile sig_atomic_t stopped;
     int read_only, started;
     json_t *settings;
+    ph_tray tray;
+    double tray_retry;
 } ph_bridge;
 int ph_bridge_start(ph_bridge *, ph_context *, int, ph_error *);
 void ph_bridge_stop(ph_bridge *);

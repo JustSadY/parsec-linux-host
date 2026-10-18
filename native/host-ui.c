@@ -25,7 +25,7 @@ extern unsigned char *ui_context;
 #pragma GCC visibility pop
 
 /* Shared only with our unprivileged launcher. No account/session data. */
-_Static_assert(sizeof(struct Bridge) == 1840, "bridge ABI");
+_Static_assert(sizeof(struct Bridge) == 3320, "bridge ABI");
 static struct Bridge *bridge;
 static int attempted;
 
@@ -130,6 +130,25 @@ void host_page(float width, void *context) {
     if (button(0, b->running ? "Stop hosting" : "Start hosting", b->busy || !b->configured))
         request(b, b->running ? 3 : 2);
     finish(width, padding);
+
+    /* The live room while hosting runs, as lowlatd reports it. Each Kick
+     * button carries its guest's id after "##", so every one is distinct. */
+    if (b->running) {
+        b->stream[95] = 0;
+        if (b->stream[0]) text(b->stream, 0);
+        unsigned guests = b->guest_count > BRIDGE_GUESTS_MAX ? BRIDGE_GUESTS_MAX : b->guest_count;
+        if (!guests) text("No guests connected.", 0);
+        gap(10);
+        for (unsigned i = 0; i < guests; ++i) {
+            b->guest_titles[i][79] = b->guest_details[i][63] = b->guest_kick[i][23] = 0;
+            padding = row(width, b->guest_titles[i], b->guest_details[i]);
+            if (button(0, b->guest_kick[i], b->busy)) {
+                b->kick_guest = b->guest_ids[i];
+                request(b, 10);
+            }
+            finish(width, padding);
+        }
+    }
 
     padding = row(width, "Host Name", "The name shown in your list of computers.");
     input("", "Computer name", b->name, sizeof(b->name), 0, 0, 0);

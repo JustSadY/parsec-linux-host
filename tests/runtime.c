@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 static int failures, checks;
@@ -148,8 +149,81 @@ static void test_share_secret(void) {
     rmdir(dir);
 }
 
+static const char room_frame[] =
+    "{\"state\":{\"output\":\"DP-1\",\"width\":1920,\"height\":1080,\"fps\":60,\"bitrate\":10,"
+    "\"codec\":\"h264\",\"guests\":[{\"id\":3,\"owner\":true,\"name\":\"lykia\",\"connected\":true},"
+    "{\"id\":4,\"owner\":false,\"name\":\"friend\\nx\",\"connected\":false}]}}";
+
+static void test_tray_state(void) {
+    ph_room room;
+    CHECK(ph_tray_parse_state(room_frame, strlen(room_frame), &room) == 0, "state frame parses");
+    CHECK(room.count == 2 && room.guests[0].id == 3 && room.guests[1].id == 4, "guest ids");
+    CHECK(room.guests[0].owner && room.guests[0].connected, "owner connected");
+    CHECK(!room.guests[1].owner && !room.guests[1].connected, "friend connecting");
+    CHECK(!strcmp(room.guests[1].name, "friend?x"), "control characters are not drawn");
+    CHECK(room.width == 1920 && room.fps == 60 && !strcmp(room.codec, "h264"), "stream fields");
+    CHECK(ph_tray_parse_state("{\"bye\":\"x\"}", 11, &room) == 1, "other frames are not a state");
+    CHECK(ph_tray_parse_state("nope", 4, &room) == -1, "garbage is refused");
+}
+
+static void frame_out(int fd, const char *body) {
+    uint32_t n = (uint32_t)strlen(body);
+    unsigned char head[4] = {n & 0xff, (n >> 8) & 0xff, (n >> 16) & 0xff, n >> 24};
+    CHECK(write(fd, head, 4) == 4 && write(fd, body, n) == (ssize_t)n, "test frame written");
+}
+
+static int frame_in(int fd, char *out, size_t size) {
+    unsigned char head[4];
+    if (read(fd, head, 4) != 4)
+        return -1;
+    size_t n = head[0] | head[1] << 8 | head[2] << 16 | (size_t)head[3] << 24;
+    if (n >= size || read(fd, out, n) != (ssize_t)n)
+        return -1;
+    out[n] = 0;
+    return 0;
+}
+
+static void test_tray_channel(void) {
+    int sv[2];
+    CHECK(!socketpair(AF_UNIX, SOCK_STREAM, 0, sv), "socketpair");
+    ph_tray tray;
+    ph_tray_init(&tray);
+    ph_error e = {0};
+    CHECK(!ph_tray_adopt(&tray, sv[0], &e), "tray adopts a socket");
+    char body[512];
+    CHECK(!frame_in(sv[1], body, sizeof body) &&
+          !strcmp(body, "{\"version\":1,\"role\":\"tray\",\"can\":[]}"), "tray says hello");
+    ph_room room;
+    CHECK(ph_tray_read(&tray, &room) == 0, "nothing yet");
+    frame_out(sv[1], "{\"bye\":\"later\"}");
+    frame_out(sv[1], room_frame);
+    CHECK(ph_tray_read(&tray, &room) == 1 && room.count == 2, "state arrives after another frame");
+    CHECK(!ph_tray_kick(&tray, 4, &e), "kick is sent");
+    CHECK(!frame_in(sv[1], body, sizeof body) && !strcmp(body, "{\"kick\":4}"), "kick frame");
+    close(sv[1]);
+    CHECK(ph_tray_read(&tray, &room) == -1, "a closed channel is reported");
+    ph_tray_close(&tray);
+    CHECK(tray.fd == -1 && ph_tray_kick(&tray, 1, &e) == -1, "no kick without a channel");
+}
+
+static void test_room_published(void) {
+    struct Bridge b;
+    memset(&b, 0, sizeof b);
+    ph_room room;
+    ph_tray_parse_state(room_frame, strlen(room_frame), &room);
+    ph_bridge_publish_room(&b, &room);
+    CHECK(b.guest_count == 2 && b.guest_ids[1] == 4, "guests published");
+    CHECK(!strcmp(b.guest_titles[0], "lykia (#3)"), "title carries the id");
+    CHECK(!strcmp(b.guest_details[0], "Your account · connected"), "owner details");
+    CHECK(!strcmp(b.guest_details[1], "Invited guest · connecting"), "guest details");
+    CHECK(!strcmp(b.guest_kick[1], "Kick##guest-4"), "kick button has its own id");
+    CHECK(!strcmp(b.stream, "Streaming 1920x1080 · 60 FPS · 10 Mbps · H.264"), "stream line");
+    ph_bridge_publish_room(&b, NULL);
+    CHECK(b.guest_count == 0 && !b.stream[0], "room cleared");
+}
+
 static void test_bridge_abi(void) {
-    CHECK(sizeof(struct Bridge) == 1840, "bridge struct size");
+    CHECK(sizeof(struct Bridge) == 3320, "bridge struct size");
     struct Bridge b;
     memset(&b, 0, sizeof b);
     json_t *status = json_pack("{s:b,s:s}", "share_enabled", 1, "share_link",
@@ -166,6 +240,9 @@ int main(void) {
     test_resolve_and_argv();
     test_encoder_device();
     test_share_secret();
+    test_tray_state();
+    test_tray_channel();
+    test_room_published();
     test_bridge_abi();
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
