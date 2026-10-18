@@ -33,7 +33,7 @@ source=("$pkgname-$pkgver.tar.gz"
         "parsec-linux-$_parsecver.deb::https://builds.parsec.app/package/parsec-linux.deb"
         "parsecd-$_modulever.so::https://builds.parsec.app/channel/release/binary/linux/gz/parsecd-$_modulever.so")
 noextract=("parsec-linux-$_parsecver.deb" "parsecd-$_modulever.so")
-sha256sums=('3ab29f3a66ddb0ca6c35dfcb4303fda455b7f9a61d60dec07dac1fc51bdb2efa'
+sha256sums=('0664a739f9d22bb7a757a2fcc31834564b076c714e1ab12c5852e4d5716d1903'
             'e30b4af9f4030b698bd814588fa5e8c3687b12efe823fb47f1ab78c1eb1bb55d'
             'c8a4407713d72dcb1c59f082977e81e1b9e8ffd679d0666882cde4c8a0821dd2'
             '10af623d573b566bfd3f9a5c36a509001e02be3da5a60e0f2e0f6920cb6eb983')
@@ -56,6 +56,9 @@ prepare() {
 build() {
     python "$srcdir/$pkgname-$pkgver/tools/build-native.py" \
         --module "$srcdir/parsecd-$_modulever.so" --output "$srcdir/native-build"
+    # The source archive's files carry a fixed 1970 timestamp, so objects
+    # kept from an earlier run always look newer; build them from scratch.
+    rm -rf "$srcdir/runtime-build"
     make -C "$srcdir/$pkgname-$pkgver/runtime" OUT="$srcdir/runtime-build" all
     cd "$srcdir/lowlat-$_lowlat"
     # A distributable x86_64 build must not inherit CachyOS target-cpu=native.

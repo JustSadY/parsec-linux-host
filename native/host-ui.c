@@ -27,7 +27,7 @@ extern unsigned char *ui_context;
 /* Shared only with our unprivileged launcher. No account/session data. */
 _Static_assert(sizeof(struct Bridge) == 3352, "bridge ABI");
 static struct Bridge *bridge;
-static int attempted;
+static int attempted, mismatched;
 
 /* Prevent aggregate initializers becoming absolute pointer tables at -Os. */
 __attribute__((noinline)) static const char *relative_string(const char *p) {
@@ -53,14 +53,17 @@ static struct Bridge *connect_bridge(void) {
     if (!path || !*path) return 0;
     long fd = syscall6(2, (long)path, 2 | 0x80000, 0, 0, 0, 0);
     if (fd < 0) return 0;
-    /* Validate size before mapping, so a truncated file cannot cause SIGBUS. */
+    /* Validate size before mapping, so a truncated file cannot cause SIGBUS.
+     * A bridge of another size or version is a launcher from another build. */
     long size = syscall6(8, fd, 0, 2, 0, 0, 0);
+    if (size > 0 && size != sizeof(struct Bridge)) mismatched = 1;
     long address = size == sizeof(struct Bridge)
         ? syscall6(9, 0, sizeof(struct Bridge), 3, 1, fd, 0) : -1;
     syscall6(3, fd, 0, 0, 0, 0, 0);
     if ((unsigned long)address >= (unsigned long)-4095) return 0;
     struct Bridge *b = (void *)address;
     if (b->magic != 0x50484f53 || b->version != BRIDGE_VERSION) {
+        if (b->magic == 0x50484f53) mismatched = 1;
         syscall6(11, address, sizeof(*b), 0, 0, 0, 0);
         return 0;
     }
@@ -116,7 +119,9 @@ void host_page(float width, void *context) {
     header(context, 0, "HOST SETTINGS");
     struct Bridge *b = connect_bridge();
     if (!b) {
-        text("Host controller unavailable. Open this test with the project launcher.", 0);
+        text(mismatched
+            ? "The launcher and this page are from different builds. Reinstall the package, then reopen Parsec Linux Host."
+            : "Host controller unavailable. Open this test with the project launcher.", 0);
         return;
     }
     text("Linux hosting uses lowlat. Save changes, then restart hosting to apply.", 0);
