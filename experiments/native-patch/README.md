@@ -59,6 +59,23 @@ search alone does not prove the absence of all equivalent or encoded UI code.
 
 ## Reproduce
 
+### Masaüstünde açmak
+
+Önce açık Parsec istemcisini kapat. Çalışan lowlat host servisini kapatmak
+gerekmez. Linux masaüstündeki terminalde, sudo kullanmadan:
+
+```sh
+cd ~/Desktop/parsec-linux-host
+make -f experiments/native-patch/Makefile desktop
+```
+
+Bu hedef önce yamayı derleyip işlev testlerini çalıştırır, ardından yamalı gerçek
+Parsec istemcisini masaüstünde açar. Mevcut giriş vendor istemci tarafından
+kullanılır; profil yazıları geçici RAM katmanına gider. Pencereyi kapatınca
+test sona erer. GUI, normal uygulamayla aynı görünebilir: bu deneyde destek
+yanıtı true olsa da Host sekmesi henüz görünmez ve native host çalışmaz.
+Yalnızca terminal doğrulaması için aşağıdaki `check` hedefini kullan.
+
 From the repository root, with binutils, a C compiler, bubblewrap and the
 matching module present:
 
