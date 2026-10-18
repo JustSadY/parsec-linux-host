@@ -47,7 +47,9 @@ Yönetim işlemleri Polkit ile Linux yönetici doğrulaması ister. Pencereyi
 kapatmak host servisini durdurmaz.
 
 GPU PCI adresiyle saklanır. `card0/card1` sırası çalışma anında çözülür; VFIO
-kartları listelenmez. Seçilen GPU'ya bağlı ekran gerekir. Sürücüler, VFIO,
+kartları listelenmez. Seçilen GPU'ya bağlı ekran gerekir: ekranı olmayan GPU'lar
+listenin sonunda "(no display connected)" notuyla görünür ama seçilemez, çünkü
+yakalama ve kodlama ekranın bağlı olduğu GPU'da yapılır. Sürücüler, VFIO,
 çekirdek parametreleri veya genel aygıt izinleri değiştirilmez.
 
 ## Arch / CachyOS build

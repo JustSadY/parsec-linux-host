@@ -31,13 +31,26 @@ json_t *ph_bridge_form(ph_bridge *w,const struct Bridge *b,ph_error *e){
     json_object_set_new(s,"fps",json_integer(b->fps));json_object_set_new(s,"bitrate",json_integer(b->bitrate));json_object_set_new(s,"codec",json_string(codec[b->codec]));json_object_set_new(s,"quality",json_string(quality[b->quality]));json_object_set_new(s,"encoder",json_string(encoder[b->encoder]));json_object_set_new(s,"conversion",json_string(conversion[b->conversion]));
     json_object_set_new(s,"autostart",json_boolean(b->autostart));json_object_set_new(s,"full_fps",json_boolean(b->full_fps));json_object_set_new(s,"mute_speakers",json_boolean(b->mute_speakers));json_object_set_new(s,"clipboard",json_boolean(b->clipboard));json_t *valid=ph_settings_validate(s,e);json_decref(s);return valid;
 }
+/* Every GPU the inventory knows: those with a connected display first, then
+ * the rest, labelled, because capture needs a lit display on that GPU. */
+void ph_bridge_publish_gpus(struct Bridge *b,json_t *devices){
+    unsigned count=0,cap=sizeof b->gpu_ids/sizeof *b->gpu_ids;json_t *d;size_t i;
+    for(int pass=0;pass<2;pass++)json_array_foreach(devices,i,d){
+        if(count>=cap)break;
+        int usable=json_array_size(json_object_get(d,"outputs"))>0;if(usable!=(pass==0))continue;
+        const char *pci=json_string_value(json_object_get(d,"pci")),*label=json_string_value(json_object_get(d,"label"));if(!pci||!label)continue;
+        char text[160];snprintf(text,sizeof text,usable?"%s":"%s (no display connected)",label);
+        utf8_copy(b->gpu_ids[count],sizeof b->gpu_ids[count],pci);utf8_copy(b->gpu_labels[count],sizeof b->gpu_labels[count],text);
+        b->gpu_usable[count]=usable;count++;
+    }
+    b->gpu_count=count;
+}
 int ph_bridge_refresh(ph_bridge *w,int settings,int preserve_message,ph_error *e){
     json_t *result=ph_helper_call(w->ctx,"status",NULL,0,e);if(!result)return -1;struct Bridge *b=w->state;
     b->configured=json_is_true(json_object_get(result,"configured"));const char *service=json_string_value(json_object_get(json_object_get(result,"service"),"ActiveState"));b->running=service&&!strcmp(service,"active");
     if(!preserve_message){char text[256];snprintf(text,sizeof text,"Linux host: %s | %s",service?service:"unknown",b->configured?"Host account connected":"Connect the Host account first");ph_bridge_message(b,text);}
     if(settings){json_t *s=ph_settings_validate(json_object_get(result,"settings"),e);if(!s){json_decref(result);return -1;}json_decref(w->settings);w->settings=s;load_form(b,s);}
-    json_t *devices=json_object_get(result,"devices"),*d;size_t i;unsigned count=0;
-    json_array_foreach(devices,i,d){if(count>=8)break;if(!json_array_size(json_object_get(d,"outputs")))continue;const char *pci=json_string_value(json_object_get(d,"pci")),*label=json_string_value(json_object_get(d,"label"));if(!pci||!label)continue;utf8_copy(b->gpu_ids[count],sizeof b->gpu_ids[count],pci);utf8_copy(b->gpu_labels[count],sizeof b->gpu_labels[count],label);count++;}b->gpu_count=count;
+    ph_bridge_publish_gpus(b,json_object_get(result,"devices"));
     ph_bridge_extra_refresh(b,result);json_decref(result);return 0;
 }
 static int login_terminal(ph_error *e){

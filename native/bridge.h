@@ -21,7 +21,11 @@ struct Bridge {
     char guest_titles[8][80], guest_details[8][64], guest_kick[8][24];
     uint32_t kick_guest;
     char stream[96];
+    /* Whether each listed GPU has a connected display and so can capture.
+     * GPUs without one are listed after the others, labelled, and the page
+     * does not select them. */
+    int32_t gpu_usable[8];
 };
-#define BRIDGE_VERSION 4
+#define BRIDGE_VERSION 5
 #define BRIDGE_GUESTS_MAX 8
 #endif

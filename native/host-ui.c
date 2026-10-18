@@ -25,7 +25,7 @@ extern unsigned char *ui_context;
 #pragma GCC visibility pop
 
 /* Shared only with our unprivileged launcher. No account/session data. */
-_Static_assert(sizeof(struct Bridge) == 3320, "bridge ABI");
+_Static_assert(sizeof(struct Bridge) == 3352, "bridge ABI");
 static struct Bridge *bridge;
 static int attempted;
 
@@ -157,17 +157,24 @@ void host_page(float width, void *context) {
     input("", "auto or DP-1", b->output, sizeof(b->output), 0, 0, 0);
     finish(width, padding);
 
-    padding = row(width, "Capture GPU", "Select the GPU with the display you want to share.");
     const char *gpus[9];
     gpus[0] = "Automatic";
-    int gpu_count = b->gpu_count > 8 ? 8 : b->gpu_count, gpu_selected = 0;
+    int gpu_count = b->gpu_count > 8 ? 8 : b->gpu_count, gpu_selected = 0, without_display = 0;
     for (int i = 0; i < gpu_count; ++i) {
         b->gpu_ids[i][31] = b->gpu_labels[i][95] = 0;
         gpus[i + 1] = b->gpu_labels[i];
         if (equal(b->gpu, b->gpu_ids[i])) gpu_selected = i + 1;
+        if (!b->gpu_usable[i]) without_display = 1;
     }
-    if (combo("", &gpu_selected, gpus, gpu_count + 1, -1))
-        copy_gpu(b->gpu, gpu_selected ? b->gpu_ids[gpu_selected - 1] : "auto");
+    padding = row(width, "Capture GPU", without_display
+        ? "Select the GPU with the display you want to share. A GPU marked (no display connected) cannot capture until a display is connected to it."
+        : "Select the GPU with the display you want to share.");
+    /* A GPU with no display has nothing to capture: choosing it changes
+     * nothing, and the next frame shows the previous choice again. */
+    if (combo("", &gpu_selected, gpus, gpu_count + 1, -1)) {
+        if (!gpu_selected) copy_gpu(b->gpu, "auto");
+        else if (b->gpu_usable[gpu_selected - 1]) copy_gpu(b->gpu, b->gpu_ids[gpu_selected - 1]);
+    }
     finish(width, padding);
 
     padding = row(width, "Encoder", "Hardware video encoder. Software CPU encoding is unavailable.");

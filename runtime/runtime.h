@@ -74,6 +74,7 @@ int ph_tray_kick(ph_tray *, uint32_t guest, ph_error *);
 void ph_tray_close(ph_tray *);
 int ph_tray_parse_state(const char *body, size_t length, ph_room *);
 void ph_bridge_publish_room(struct Bridge *, const ph_room *);
+void ph_bridge_publish_gpus(struct Bridge *, json_t *devices);
 
 typedef struct {
     ph_context *ctx;

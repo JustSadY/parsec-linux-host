@@ -222,8 +222,25 @@ static void test_room_published(void) {
     CHECK(b.guest_count == 0 && !b.stream[0], "room cleared");
 }
 
+static void test_gpus_published(void) {
+    struct Bridge b;
+    memset(&b, 0, sizeof b);
+    json_t *devices = json_pack(
+        "[{s:s,s:s,s:[]},{s:s,s:s,s:[s]}]",
+        "pci", "0000:05:00.0", "label", "AMD [67df] · 0000:05:00.0", "outputs",
+        "pci", "0000:01:00.0", "label", "NVIDIA [2f04] · 0000:01:00.0", "outputs", "DP-1");
+    ph_bridge_publish_gpus(&b, devices);
+    CHECK(b.gpu_count == 2, "every GPU is listed");
+    CHECK(!strcmp(b.gpu_ids[0], "0000:01:00.0") && b.gpu_usable[0], "a GPU with a display comes first");
+    CHECK(!strcmp(b.gpu_labels[0], "NVIDIA [2f04] · 0000:01:00.0"), "its label is unchanged");
+    CHECK(!strcmp(b.gpu_ids[1], "0000:05:00.0") && !b.gpu_usable[1], "a GPU without one follows");
+    CHECK(!strcmp(b.gpu_labels[1], "AMD [67df] · 0000:05:00.0 (no display connected)"),
+          "and says why it cannot capture");
+    json_decref(devices);
+}
+
 static void test_bridge_abi(void) {
-    CHECK(sizeof(struct Bridge) == 3320, "bridge struct size");
+    CHECK(sizeof(struct Bridge) == 3352, "bridge struct size");
     struct Bridge b;
     memset(&b, 0, sizeof b);
     json_t *status = json_pack("{s:b,s:s}", "share_enabled", 1, "share_link",
@@ -243,6 +260,7 @@ int main(void) {
     test_tray_state();
     test_tray_channel();
     test_room_published();
+    test_gpus_published();
     test_bridge_abi();
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
