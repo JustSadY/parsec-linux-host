@@ -8,6 +8,8 @@
 #include <pwd.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <sys/wait.h>
+#include <time.h>
 
 static int failures, checks;
 #define CHECK(cond, name) do { checks++; if (!(cond)) { failures++; \
@@ -399,13 +401,19 @@ static int fake_service(ph_context *c, char *const argv[], const char *input,
     return 0;
 }
 static void test_live_revoke(void) {
+    /* Root CI has no UID 1000. Use a real non-root owner there too. */
+    struct passwd *user = getuid() ? getpwuid(getuid()) : getpwnam("nobody");
+    CHECK(user && user->pw_uid >= 1000, "fixture desktop identity exists");
+    if (!user) return;
+    uid_t uid = user->pw_uid;
+    gid_t gid = user->pw_gid;
     char dir[] = "/tmp/parsec-live-test-XXXXXX";
     CHECK(mkdtemp(dir) != NULL, "live share fixture directory");
     ph_context c;
     ph_context_init(&c);
     c.etc = dir;
     c.euid = 0;
-    c.caller_uid = getuid();
+    c.caller_uid = uid;
     c.run = fake_service;
     char dropin[512], path[1024], peer_path[512];
     snprintf(peer_path, sizeof peer_path, "%s/host-peer.json", dir);
@@ -415,7 +423,7 @@ static void test_live_revoke(void) {
     c.dropin = dropin;
     snprintf(path, sizeof path, "%s/owner.conf", dropin);
     FILE *f = fopen(path, "w");
-    fprintf(f, "[Service]\nGroup=%u\n", (unsigned)getgid());
+    fprintf(f, "[Service]\nGroup=%u\n", (unsigned)gid);
     fclose(f);
     snprintf(path, sizeof path, "%s/share.json", dir);
     f = fopen(path, "w");
@@ -429,14 +437,99 @@ static void test_live_revoke(void) {
     json_decref(result);
     snprintf(path, sizeof path, "%s/share.json", dir);
     struct stat st;
-    CHECK(!stat(path, &st) && (st.st_mode & 0777) == 0640 && st.st_gid == getgid(),
+    CHECK(!stat(path, &st) && (st.st_mode & 0777) == 0640 && st.st_gid == gid,
           "bearer share state is restricted to desktop owner group");
     unlink(path);
+    c.rules = dropin; /* Only temporary fixtures may receive policy. */
+    result = ph_dispatch(&c, "authorize-owner", NULL, &e);
+    CHECK(result && json_is_true(json_object_get(result, "passwordless")),
+          "administrator can opt in to owner authorization");
+    json_decref(result);
+    snprintf(path, sizeof path, "%s/60-parsec-linux-host-owner.rules", dropin);
+    char rule[2048] = {0};
+    f = fopen(path, "r");
+    if (f) {
+        size_t length = fread(rule, 1, sizeof rule - 1, f);
+        rule[length] = 0;
+        fclose(f);
+    }
+    CHECK(strstr(rule, "org.parsec-linux-host.manage") &&
+          strstr(rule, "action.lookup('program') === '" PH_LIB "/hostctl'") &&
+          strstr(rule, "action.lookup('user') === 'root'") &&
+          strstr(rule, "subject.local && subject.active") &&
+          strstr(rule, "subject.user === \"") &&
+          !stat(path, &st) && (st.st_mode & 0777) == 0644,
+          "owner policy restricts executable, target and local active account");
+    c.euid = uid;
+    result = ph_dispatch(&c, "revoke-owner-authorization", NULL, &e);
+    CHECK(!result && !access(path, F_OK), "unprivileged code cannot edit owner policy");
+    json_decref(result);
+    c.euid = 0;
+    c.caller_uid = 0;
+    result = ph_dispatch(&c, "authorize-owner", NULL, &e);
+    CHECK(!result, "root is not accepted as a desktop owner");
+    json_decref(result);
+    c.caller_uid = uid;
+    result = ph_dispatch(&c, "revoke-owner-authorization", NULL, &e);
+    CHECK(result && !json_is_true(json_object_get(result, "passwordless")) &&
+          access(path, F_OK), "administrator can revoke passwordless authorization");
+    json_decref(result);
     snprintf(path, sizeof path, "%s/owner.json", dir);
     unlink(path);
     snprintf(path, sizeof path, "%s/owner.conf", dropin);
     unlink(path);
     rmdir(dropin);
+    rmdir(dir);
+}
+static volatile sig_atomic_t wait_cancelled;
+static void cancel_wait(int sig) { (void)sig; wait_cancelled = 1; }
+static void test_boot_display_wait(void) {
+    char dir[] = "/tmp/parsec-display-test-XXXXXX";
+    CHECK(mkdtemp(dir) != NULL, "boot display fixture directory");
+    ph_context c;
+    ph_context_init(&c);
+    c.drm = dir;
+    c.cancel = &wait_cancelled;
+    json_t *settings = ph_settings_default();
+    ph_error e = {0};
+    wait_cancelled = 1;
+    double before = ph_now();
+    json_t *result = ph_wait_display(&c, settings, &e);
+    CHECK(!result && ph_now() - before < .5, "cancelled boot wait stops immediately");
+    json_decref(result);
+    int ready[2];
+    CHECK(!pipe(ready), "boot wait readiness pipe");
+    pid_t pid = fork();
+    if (!pid) {
+        close(ready[0]);
+        wait_cancelled = 0;
+        struct sigaction sa = {0};
+        sa.sa_handler = cancel_wait;
+        sigemptyset(&sa.sa_mask);
+        sigaction(SIGTERM, &sa, NULL);
+        alarm(4); /* Fail boundedly if cancellation regresses. */
+        if (write(ready[1], "R", 1) != 1) _exit(3);
+        close(ready[1]);
+        json_t *device = ph_wait_display(&c, settings, &e);
+        int ok = !device && wait_cancelled;
+        json_decref(device);
+        _exit(ok ? 0 : 2);
+    }
+    close(ready[1]);
+    CHECK(pid > 0, "boot wait process starts");
+    if (pid > 0) {
+        char byte = 0;
+        CHECK(read(ready[0], &byte, 1) == 1 && byte == 'R', "boot wait cancellation handler is ready");
+        struct timespec delay = {0, 100000000};
+        nanosleep(&delay, NULL);
+        int status = 0;
+        CHECK(waitpid(pid, &status, WNOHANG) == 0, "missing display waits instead of failing at boot");
+        kill(pid, SIGTERM);
+        waitpid(pid, &status, 0);
+        CHECK(WIFEXITED(status) && !WEXITSTATUS(status), "stop signal cancels pending boot cleanly");
+    }
+    close(ready[0]);
+    json_decref(settings);
     rmdir(dir);
 }
 static void test_pending_bounds_and_utf8(void) {
@@ -490,6 +583,7 @@ int main(void) {
     test_peer_identity();
     test_peer_status();
     test_live_revoke();
+    test_boot_display_wait();
     test_pending_bounds_and_utf8();
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

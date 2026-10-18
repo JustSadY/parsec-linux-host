@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static int matches(const char *s,const char *pattern){regex_t r;if(regcomp(&r,pattern,REG_EXTENDED|REG_NOSUB))return 0;int ok=!regexec(&r,s,0,NULL,0);regfree(&r);return ok;}
 static int read_text(const char *path,char *out,size_t cap){FILE *f=fopen(path,"re");if(!f)return -1;if(!fgets(out,(int)cap,f)){fclose(f);return -1;}fclose(f);out[strcspn(out,"\r\n")]=0;return 0;}
@@ -22,10 +23,11 @@ json_t *ph_inventory(const char *root,ph_error *e){
         if(!matches(v,"^[0-9a-f]{4}$")||!matches(id,"^[0-9a-f]{4}$"))continue;
         json_t *outputs=json_array();size_t prefix=strlen(card);
         for(int j=0;j<count;j++){const char *connector=items[j]->d_name;if(strncmp(connector,card,prefix)||connector[prefix]!='-')continue;snprintf(path,sizeof path,"%s/%s/status",root,connector);char status[40];if(!read_text(path,status,sizeof status)&&!strcmp(status,"connected"))json_array_append_new(outputs,json_string(connector+prefix+1));}
-        const char *brand=!strcmp(v,"10de")?"NVIDIA":!strcmp(v,"1002")?"AMD":!strcmp(v,"8086")?"Intel":v;char label[128];snprintf(label,sizeof label,"%s [%s] · %s",brand,id,pci);
+        const char *brand=!strcmp(v,"10de")?"NVIDIA":!strcmp(v,"1002")?"AMD":!strcmp(v,"8086")?"Intel":v;char label[128];snprintf(label,sizeof label,"%.6s [%.4s] · %.12s",brand,id,pci);
         json_t *d=json_pack("{s:s,s:s,s:s,s:s,s:s,s:o}","pci",pci,"card",card,"vendor",v,"driver",driver,"label",label,"outputs",outputs);json_array_append_new(devices,d);
     }
-    for(int i=0;i<count;i++)free(items[i]);free(items);return devices;
+    for(int i=0;i<count;i++)free(items[i]);
+    free(items);return devices;
 }
 json_t *ph_resolve(json_t *s,json_t *devices,ph_error *e){
     const char *gpu=json_string_value(json_object_get(s,"gpu")),*output=json_string_value(json_object_get(s,"output"));if(!gpu||!output||!json_is_array(devices)){ph_fail(e,"Invalid GPU selection");return NULL;}
@@ -34,7 +36,30 @@ json_t *ph_resolve(json_t *s,json_t *devices,ph_error *e){
         if(strcmp(output,"auto")){int found=0;size_t j;json_t *o;json_array_foreach(outputs,j,o){const char *v=json_string_value(o);if(v&&!strcmp(v,output))found=1;}if(!found)continue;}
         if(!best||strcmp(pci,json_string_value(json_object_get(best,"pci")))<0)best=d;
     }
-    if(!best)ph_fail(e,"No connected display on the selected GPU; VFIO devices are excluded");return best?json_incref(best):NULL;
+    if(!best)ph_fail(e,"No connected display on the selected GPU; VFIO devices are excluded");
+    return best?json_incref(best):NULL;
+}
+
+/* A boot service starts before the display manager has necessarily brought up
+ * a connector. Wait without consuming systemd's restart budget. SIGTERM can
+ * cancel this just as it can stop a running stream. */
+json_t *ph_wait_display(ph_context *c,json_t *settings,ph_error *e){
+    int announced=0;
+    while(!(c->cancel&&*c->cancel)){
+        ph_error probe={0};
+        json_t *devices=ph_inventory(c->drm,&probe);
+        json_t *device=ph_resolve(settings,devices,&probe);
+        json_decref(devices);
+        if(device)return device;
+        if(!announced){
+            fprintf(stderr,"Waiting for the configured GPU and connected display\n");
+            announced=1;
+        }
+        struct timespec delay={1,0};
+        nanosleep(&delay,NULL);
+    }
+    ph_fail(e,"Display wait cancelled");
+    return NULL;
 }
 
 /* A headless AMD/Intel card can encode: only capture needs a lit output. */

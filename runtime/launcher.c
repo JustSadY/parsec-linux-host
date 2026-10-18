@@ -15,10 +15,26 @@
 static volatile sig_atomic_t client_pid;
 static void stop_client(int signal){if(client_pid>0)kill(client_pid,signal);}
 static int verify_module(const char *module,const char *expected){
-    if(!expected||strlen(expected)!=64)return 0;int fd=open(module,O_RDONLY|O_CLOEXEC|O_NOFOLLOW);if(fd<0)return 0;EVP_MD_CTX *ctx=EVP_MD_CTX_new();if(!ctx){close(fd);return 0;}int ok=EVP_DigestInit_ex(ctx,EVP_sha256(),NULL);char block[16384];ssize_t n;while(ok&&(n=read(fd,block,sizeof block))>0)ok=EVP_DigestUpdate(ctx,block,(size_t)n);if(n<0)ok=0;unsigned char digest[32];unsigned length=0;if(ok)ok=EVP_DigestFinal_ex(ctx,digest,&length);EVP_MD_CTX_free(ctx);close(fd);char hex[65];for(unsigned i=0;i<32;i++)snprintf(hex+i*2,3,"%02x",digest[i]);return ok&&length==32&&!strcmp(hex,expected);
+    if(!expected||strlen(expected)!=64)return 0;
+    int fd=open(module,O_RDONLY|O_CLOEXEC|O_NOFOLLOW);
+    if(fd<0)return 0;
+    EVP_MD_CTX *ctx=EVP_MD_CTX_new();
+    if(!ctx){close(fd);return 0;}
+    int ok=EVP_DigestInit_ex(ctx,EVP_sha256(),NULL);
+    char block[16384];ssize_t n=0;
+    while(ok&&(n=read(fd,block,sizeof block))>0)
+        ok=EVP_DigestUpdate(ctx,block,(size_t)n);
+    if(n<0)ok=0;
+    unsigned char digest[32]={0};unsigned length=0;
+    if(ok)ok=EVP_DigestFinal_ex(ctx,digest,&length);
+    EVP_MD_CTX_free(ctx);close(fd);
+    char hex[65];
+    for(unsigned i=0;i<32;i++)snprintf(hex+i*2,3,"%02x",digest[i]);
+    return ok&&length==32&&!strcmp(hex,expected);
 }
 static int launch(ph_context *c,int count,char **extra,int temporary,int read_only,ph_error *e){
-    if(geteuid()==0)return ph_fail(e,"Open Parsec as your desktop user, without sudo");const char *display=getenv("DISPLAY");if(!display||!*display)return ph_fail(e,"An X11 or XWayland desktop session is required");
+    if(geteuid()==0)return ph_fail(e,"Open Parsec as your desktop user, without sudo");
+    const char *display=getenv("DISPLAY");if(!display||!*display)return ph_fail(e,"An X11 or XWayland desktop session is required");
     struct passwd *user=getpwuid(getuid());if(!user)return ph_fail(e,"Unknown desktop account");const char *home=user->pw_dir;char vendor[PATH_MAX],module_dir[PATH_MAX],module[PATH_MAX],metadata_path[PATH_MAX],profile[PATH_MAX],profile_module[PATH_MAX],profile_meta[PATH_MAX];
     /* A development override, honoured only for this unprivileged user's own
      * run (root is refused above); the module is still consistency-checked. */

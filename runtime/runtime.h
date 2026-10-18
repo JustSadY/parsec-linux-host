@@ -17,7 +17,7 @@ typedef struct { int code; char *out; } ph_process;
 typedef struct ph_context ph_context;
 struct ph_context {
     const char *etc, *lib, *drm, *systemctl, *journalctl, *helper, *pkexec;
-    const char *dropin, *peer_cache;
+    const char *dropin, *peer_cache, *rules;
     uid_t euid, caller_uid;
     volatile sig_atomic_t *cancel;
     int (*run)(ph_context *, char *const [], const char *, char *const [], int, ph_process *, ph_error *);
@@ -37,6 +37,7 @@ json_t *ph_settings_validate(json_t *, ph_error *);
 json_t *ph_settings_load(ph_context *, ph_error *);
 json_t *ph_inventory(const char *, ph_error *);
 json_t *ph_resolve(json_t *, json_t *, ph_error *);
+json_t *ph_wait_display(ph_context *, json_t *, ph_error *);
 json_t *ph_encoder_select(json_t *, json_t *, ph_error *);
 char **ph_host_argv(ph_context *, json_t *, json_t *, const char *secret, ph_error *);
 void ph_argv_free(char **);

@@ -51,8 +51,21 @@ gecikmeyi artırabilir. Bu yol sekiz bit H.264/HEVC, 4:2:0 ve Vulkan dönüşüm
 kullanır; 144 FPS garantisi vermez. RX 570 VFIO ile Windows'a verilmişken Linux
 kodlayıcısı olarak kullanılamaz. Ölçümler ve yöntem [GPU notlarında](docs/ENCODING-GPU.md).
 
-Yönetim işlemleri Polkit ile Linux yönetici doğrulaması ister. Pencereyi
-kapatmak host servisini durdurmaz.
+İlk yönetim işlemi Polkit ile Linux yönetici doğrulaması ister. Kendi aktif,
+yerel oturumunda ayar/Share işlemlerinde tekrar parola sorulmaması için bir kez:
+
+```sh
+sudo /usr/lib/parsec-linux-host/hostctl authorize-owner </dev/null
+```
+
+Bu, yalnızca kayıtlı host sahibini ve bu uygulamanın sabit yönetim yardımcısını
+yetkilendiren bir yerel Polkit kuralı oluşturur. Genel sudo izni vermez. Geri almak:
+
+```sh
+sudo /usr/lib/parsec-linux-host/hostctl revoke-owner-authorization </dev/null
+```
+
+Pencereyi kapatmak host servisini durdurmaz.
 
 Her iki GPU seçimi PCI adresiyle saklanır. `card0/card1` sırası çalışma anında çözülür; VFIO
 kartları listelenmez. Seçilen GPU'ya bağlı ekran gerekir: ekranı olmayan GPU'lar
@@ -66,7 +79,7 @@ yakalama ekranın bağlı olduğu GPU'da yapılır; Encoding GPU seçimi bu kıs
 make test
 make source
 makepkg -s
-sudo pacman -U ./parsec-linux-host-0.4.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./parsec-linux-host-0.4.1-1-x86_64.pkg.tar.zst
 ```
 
 `makepkg` root olarak çalıştırılmaz. Paket `parsec-bin` / `parsec` ile çakışır ve
@@ -88,6 +101,21 @@ Boot hosting için **Start at Boot** seçeneğine ek olarak:
 systemctl --user enable --now parsec-host-session.service
 ```
 
+Sistem servisi giriş yapılmadan da başlar; seçili ekran/GPU henüz hazır değilse
+bekler. Masaüstü kilitlenince servis durmaz: KMS yakalama ve uinput sistem
+servisindedir; normal kilit ekranı parolası yine gerekir. Ekranı olmayan/headless
+sistemler için sanal ekran eklenmez. Oturum açılmadan pano/ses gibi kullanıcı
+hizmetleri hazır olmayabilir. Yeniden başlatma sonrası greeter davranışı ekran
+ve sürücüye bağlıdır; canlı kilit testi soğuk açılış testinin yerini tutmaz.
+
+Misafir onaylarını görmek için istemciyi de oturum açılışında çalıştırmak istersen:
+
+```sh
+mkdir -p ~/.config/autostart
+ln -s /usr/share/applications/parsec-linux-host-integrated.desktop \
+  ~/.config/autostart/parsec-linux-host.desktop
+```
+
 ## GitHub / AUR
 
 Repository: [JustSadY/parsec-linux-host](https://github.com/JustSadY/parsec-linux-host).
@@ -96,8 +124,8 @@ Repository: [JustSadY/parsec-linux-host](https://github.com/JustSadY/parsec-linu
 python3 tools/prepare-aur.py --repo https://github.com/JustSadY/parsec-linux-host
 ```
 
-`dist/aur/PKGBUILD`, `.SRCINFO` ve `.install` üretilir. Kaynak arşivi `v0.4.0`
-GitHub release'ine `parsec-linux-host-0.4.0.tar.gz` adıyla eklenmelidir. AUR'a
+`dist/aur/PKGBUILD`, `.SRCINFO` ve `.install` üretilir. Kaynak arşivi `v0.4.1`
+GitHub release'ine `parsec-linux-host-0.4.1.tar.gz` adıyla eklenmelidir. AUR'a
 bu üç paketleme dosyasını gönder; kaynak arşivi veya proprietary binary gönderme.
 AUR indirme adresi release yayımlandığında çalışır. Üretici kendiliğinden
 GitHub release'i veya AUR paketi yayımlamaz.

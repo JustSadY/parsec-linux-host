@@ -1,7 +1,7 @@
 # Maintainer: lykia
 # Local build recipe. tools/prepare-aur.py generates the release-URL variant.
 pkgname=parsec-linux-host
-pkgver=0.4.0
+pkgver=0.4.1
 pkgrel=1
 pkgdesc='Parsec client with an in-process Linux Host settings page and lowlat backend'
 arch=('x86_64')
@@ -31,7 +31,7 @@ source=("$pkgname-$pkgver.tar.gz"
         "parsec-linux-$_parsecver.deb::https://builds.parsec.app/package/parsec-linux.deb"
         "parsecd-$_modulever.so::https://builds.parsec.app/channel/release/binary/linux/gz/parsecd-$_modulever.so")
 noextract=("parsec-linux-$_parsecver.deb" "parsecd-$_modulever.so")
-sha256sums=('0c967c22a87fca0ee8466d9bff1f4d16b52aad61573d3f4e326db2f34e119e2e'
+sha256sums=('82e7d447d4aa4fa84f999e4e8c89a7041ab4285587f6c569c4b8f99abfec3018'
             'e30b4af9f4030b698bd814588fa5e8c3687b12efe823fb47f1ab78c1eb1bb55d'
             'c8a4407713d72dcb1c59f082977e81e1b9e8ffd679d0666882cde4c8a0821dd2'
             '10af623d573b566bfd3f9a5c36a509001e02be3da5a60e0f2e0f6920cb6eb983')

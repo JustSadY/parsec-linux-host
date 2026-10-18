@@ -63,7 +63,8 @@ static int login_terminal(ph_error *e){
         if(selected==0)execl(paths[0],paths[0],"/usr/bin/parsec-linux-host","login",NULL);
         if(selected==1)execl(paths[1],paths[1],"--separate","-e","/usr/bin/parsec-linux-host","login",NULL);
         if(selected==2)execl(paths[2],paths[2],"--","/usr/bin/parsec-linux-host","login",NULL);
-        if(selected==3)execl(paths[3],paths[3],"-e","/usr/bin/parsec-linux-host","login",NULL);_exit(127);
+        if(selected==3)execl(paths[3],paths[3],"-e","/usr/bin/parsec-linux-host","login",NULL);
+        _exit(127);
     }while(waitpid(pid,NULL,0)<0&&errno==EINTR){}return 0;
 }
 static int save_snapshot(ph_bridge *w,json_t *form,ph_error *e){
@@ -120,7 +121,8 @@ static void *worker(void *arg){
             else if(action==10){if(ph_tray_kick(&w->tray,b->kick_guest,&e))sticky=1;else{ph_bridge_message(b,"Guest removed.");sticky=0;}}
             else if(action>=6){if(ph_bridge_extra_action(w,action,&e))sticky=1;else sticky=0;}
             else {ph_fail(&e,"Unknown native Host action");sticky=1;}
-            if(*e.text)ph_bridge_message(b,e.text);__atomic_store_n(&b->ack,seq,__ATOMIC_RELEASE);b->busy=0;
+            if(*e.text)ph_bridge_message(b,e.text);
+            __atomic_store_n(&b->ack,seq,__ATOMIC_RELEASE);b->busy=0;
         } else if(form&&!w->read_only&&!json_equal(form,w->settings)&&(!attempted||!json_equal(form,attempted))&&ph_now()-changed>=.75){
             b->busy=1;json_decref(attempted);attempted=json_incref(form);
             if(save_snapshot(w,form,&e)){ph_bridge_message(b,e.text);sticky=1;}else sticky=0;b->busy=0;

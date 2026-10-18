@@ -1,17 +1,17 @@
 {
-  "version": "0.4.0",
+  "version": "0.4.1",
   "vendor_module": "150-105c",
   "bridge_abi": 7,
-  "runtime_c_checks": 114,
+  "runtime_c_checks": 127,
   "native_adapter_suite": "passed",
   "rust_daemon_passed": 57,
   "rust_daemon_ignored": 4,
   "rust_core_passed": 334,
   "package_build": "passed",
-  "package_sha256": "b07b7fb4fd7e422d721de4c335ca8c2c902d27a5e98f7e1d9a0de4dc76dea320",
+  "package_sha256": "f0a35c0606294add12c9fede178b211ddc561dd2af0756543186046219bd3e7c",
   "module_sha256": "73ac58ab866537cc454672fbeffc4eb98d1f6eb707b5f215df8bd89fba2ccfe8",
-  "source_sha256": "0c967c22a87fca0ee8466d9bff1f4d16b52aad61573d3f4e326db2f34e119e2e",
-  "installed": "parsec-linux-host 0.4.0-1",
+  "source_sha256": "82e7d447d4aa4fa84f999e4e8c89a7041ab4285587f6c569c4b8f99abfec3018",
+  "installed": "parsec-linux-host 0.4.1-1",
   "service": "active/running/success",
   "verified_local_registration": true,
   "native_gui_observed": [
@@ -33,5 +33,14 @@
   "encoding_backend": "vaapi",
   "encoding_probe": "actual host loop, local seat: H264 and HEVC decoded successfully with FFmpeg",
   "encoder_selector_gui": "AMD headless selectable; selecting it keeps capture NVIDIA and selects VA-API",
-  "gpu_test_notes": "docs/ENCODING-GPU.md"
+  "gpu_test_notes": "docs/ENCODING-GPU.md",
+  "root_runtime_tests": "127 checks, 0 failures",
+  "compiler_warnings": "none in runtime or tests",
+  "owner_authorization": "three repeated saves, Share and revoke succeeded without password; unrelated program and target denied",
+  "boot_host_enabled": true,
+  "session_helper_enabled": true,
+  "desktop_client_autostart_enabled": true,
+  "lock_screen": "logind locked=yes; existing host PID stayed active; RX570 encoded 193 frames/5 seconds; decoded KDE lock screen visually verified",
+  "cold_boot_login_greeter": "not tested",
+  "remote_keyboard_on_lock_screen": "not tested"
 }

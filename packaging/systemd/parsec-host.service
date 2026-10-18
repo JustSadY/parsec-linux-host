@@ -4,8 +4,8 @@ Wants=network-online.target modprobe@nvidia_uvm.service modprobe@uinput.service 
 After=network-online.target modprobe@nvidia_uvm.service modprobe@uinput.service modprobe@uhid.service
 ConditionPathExists=/etc/parsec-host/account.json
 ConditionPathExists=/etc/parsec-host/owner.json
-StartLimitIntervalSec=60
-StartLimitBurst=3
+# Keep retrying through display-manager changes or an offline boot network.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

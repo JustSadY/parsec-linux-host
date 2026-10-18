@@ -78,7 +78,8 @@ char **ph_host_argv(ph_context *c,json_t *settings,json_t *device,const char *se
     if(secret&&*secret){ADD("--secret");ADD(secret);}else{ADD("--owner-only");}
     ADD("--clipboard");ADD(json_is_true(json_object_get(s,"clipboard"))?"both":"off");
     if(separate){ADD("--encoder");ADD("vaapi");}else if(strcmp(encoder,"auto")){ADD("--encoder");ADD(encoder);}if(strcmp(conversion,"auto")){ADD("--convert");ADD(conversion);}
-    if(!json_is_true(json_object_get(s,"mute_speakers")))ADD("--no-host-mute");if(json_is_true(json_object_get(s,"full_fps")))ADD("--full-fps");
+    if(!json_is_true(json_object_get(s,"mute_speakers")))ADD("--no-host-mute");
+    if(json_is_true(json_object_get(s,"full_fps")))ADD("--full-fps");
     json_decref(s);return args;
 #undef ADD
 bad:json_decref(s);return NULL;

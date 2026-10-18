@@ -29,6 +29,7 @@ void ph_context_init(ph_context *c) {
     c->helper=PH_LIB "/hostctl";c->pkexec="/usr/bin/pkexec";
     c->dropin="/etc/systemd/system/parsec-host.service.d";
     c->peer_cache="/run/parsec-host/host-peer.json";
+    c->rules="/etc/polkit-1/rules.d";
     c->euid=geteuid();c->caller_uid=c->euid?c->euid:caller();c->run=ph_run;c->request=ph_request;
 }
 json_t *ph_read_json(const char *path,size_t limit,int private_file,ph_error *e) {
@@ -40,10 +41,13 @@ json_t *ph_read_json(const char *path,size_t limit,int private_file,ph_error *e)
         close(fd);ph_fail(e,"Unsafe configuration file");return NULL;
     }
     json_error_t je;json_t *v=json_loadfd(fd,JSON_REJECT_DUPLICATES,&je);close(fd);
-    if(!v)ph_fail(e,"Invalid configuration JSON");return v;
+    if(!v)ph_fail(e,"Invalid configuration JSON");
+    return v;
 }
 int ph_atomic_json(const char *path,json_t *v,mode_t mode,ph_error *e) {
-    char tmp[PATH_MAX];snprintf(tmp,sizeof tmp,"%s.new-XXXXXX",path);
+    char tmp[PATH_MAX];
+    if(snprintf(tmp,sizeof tmp,"%s.new-XXXXXX",path)>=(int)sizeof tmp)
+        return ph_fail(e,"Host configuration path is too long");
     int fd=mkostemp(tmp,O_CLOEXEC);if(fd<0)return ph_fail(e,"Cannot create configuration");
     int r=fchmod(fd,mode)||json_dumpfd(v,fd,JSON_ENSURE_ASCII|JSON_COMPACT)||write(fd,"\n",1)!=1||fsync(fd);
     if(close(fd))r=1;
@@ -91,7 +95,9 @@ int ph_run(ph_context *c,char *const argv[],const char *input,char *const env[],
         if(failed){kill(-pid,SIGKILL);break;}
         if(!exited&&waitpid(pid,&status,WNOHANG)==pid)exited=1;
     }
-    if(input_open)close(in[1]);if(output_open)close(out[0]);if(!exited)while(waitpid(pid,&status,0)<0&&errno==EINTR){}
+    if(input_open)close(in[1]);
+    if(output_open)close(out[0]);
+    if(!exited)while(waitpid(pid,&status,0)<0&&errno==EINTR){}
     buffer[used]=0;res->out=buffer;res->code=WIFEXITED(status)?WEXITSTATUS(status):128+(WIFSIGNALED(status)?WTERMSIG(status):0);
     return failed?-1:0;
 }

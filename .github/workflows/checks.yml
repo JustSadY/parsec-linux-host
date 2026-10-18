@@ -7,6 +7,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: pacman -Syu --noconfirm python jansson curl openssl systemd-libs pkgconf
+      # Both the root container and an ordinary desktop UID must pass.
       - run: make test
+      - run: |
+          useradd --uid 1000 --create-home buildtest
+          chown -R buildtest:buildtest "$GITHUB_WORKSPACE"
+          runuser -u buildtest -- make test
+      - run: make -C runtime OUT=../.cache/warnings CFLAGS='-O2 -std=c11 -Wall -Wextra -Wformat=2 -Werror -fPIE -pthread' all
       - run: make native
       - run: bash -n PKGBUILD packaging/*.install packaging/parsecd tools/run-native.sh

@@ -82,13 +82,22 @@ int ph_runner_main(void) {
     ph_error e = {0};
     json_t *owner = NULL, *account = NULL, *settings = NULL, *devices = NULL, *device = NULL;
     char **args = NULL;
-    int result = 1, watch_started = 0;
+    int result = 1, watch_started = 0, signals_installed = 0;
+    struct sigaction sa = {0}, oldint, oldterm;
     peer_watch watch = {0};
     pthread_t watch_thread;
     if (geteuid() != 0) {
         ph_fail(&e, "Host service must run as root");
         goto finish;
     }
+    stopping = 0;
+    child_pid = 0;
+    sa.sa_handler = stop_runner;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT, &sa, &oldint);
+    sigaction(SIGTERM, &sa, &oldterm);
+    signals_installed = 1;
+    c.cancel = &stopping;
     /* A stale registration must never label a different remote computer as
      * this machine after a failed start or an earlier unclean service exit. */
     if (ph_peer_publish(&c, NULL, &e))
@@ -114,10 +123,11 @@ int ph_runner_main(void) {
     settings = ph_settings_load(&c, &e);
     if (!settings)
         goto finish;
-    devices = ph_inventory(c.drm, &e);
-    device = ph_resolve(settings, devices, &e);
-    if (!device)
+    device = ph_wait_display(&c, settings, &e);
+    if (!device) {
+        if (stopping) { result = 0; e.text[0] = 0; }
         goto finish;
+    }
     /* Sharing is controlled by the root-owned live file, including when it
      * changes after startup. Do not put its bearer secret in process argv. */
     args = ph_host_argv(&c, settings, device, NULL, &e);
@@ -138,21 +148,12 @@ int ph_runner_main(void) {
         explicit_bzero(session, sizeof session);
         goto finish;
     }
-    struct sigaction sa = {0}, oldint, oldterm;
-    sa.sa_handler = stop_runner;
-    sigemptyset(&sa.sa_mask);
-    sigaction(SIGINT, &sa, &oldint);
-    sigaction(SIGTERM, &sa, &oldterm);
-    stopping = 0;
-    child_pid = 0;
     pid_t pid = fork();
     if (pid < 0) {
         close(pipefd[0]);
         close(pipefd[1]);
         ph_fail(&e, "Cannot start host service");
         explicit_bzero(session, sizeof session);
-        sigaction(SIGINT, &oldint, NULL);
-        sigaction(SIGTERM, &oldterm, NULL);
         goto finish;
     }
     if (!pid) {
@@ -203,13 +204,15 @@ int ph_runner_main(void) {
         pthread_join(watch_thread, NULL);
         watch_started = 0;
     }
-    sigaction(SIGINT, &oldint, NULL);
-    sigaction(SIGTERM, &oldterm, NULL);
     sd_notify(0, "STOPPING=1");
     result = WIFEXITED(status) ? WEXITSTATUS(status) : 128+WTERMSIG(status);
     if (stopping && (result == 0 || result == 128+SIGINT || result == 128+SIGTERM))
         result = 0;
 finish:
+    if (signals_installed) {
+        sigaction(SIGINT, &oldint, NULL);
+        sigaction(SIGTERM, &oldterm, NULL);
+    }
     if (watch_started) {
         watch.stopped = 1;
         pthread_join(watch_thread, NULL);
