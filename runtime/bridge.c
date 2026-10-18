@@ -51,7 +51,7 @@ int ph_bridge_refresh(ph_bridge *w,int settings,int preserve_message,ph_error *e
     if(!preserve_message){char text[256];snprintf(text,sizeof text,"Linux host: %s | %s",service?service:"unknown",b->configured?"Host account connected":"Connect the Host account first");ph_bridge_message(b,text);}
     if(settings){json_t *s=ph_settings_validate(json_object_get(result,"settings"),e);if(!s){json_decref(result);return -1;}json_decref(w->settings);w->settings=s;load_form(b,s);}
     ph_bridge_publish_gpus(b,json_object_get(result,"devices"));
-    ph_bridge_extra_refresh(b,result);json_decref(result);return 0;
+    ph_bridge_extra_refresh(b,result);if(!b->running)b->host_peer_id[0]=0;json_decref(result);return 0;
 }
 static int login_terminal(ph_error *e){
     const char *paths[]={"/usr/bin/xdg-terminal-exec","/usr/bin/konsole","/usr/bin/gnome-terminal","/usr/bin/xterm"};int selected=-1;for(int i=0;i<4;i++)if(!access(paths[i],X_OK)){selected=i;break;}if(selected<0)return ph_fail(e,"Run parsec-linux-host login in a terminal");
@@ -73,14 +73,26 @@ static int save_snapshot(ph_bridge *w,json_t *form,ph_error *e){
  * splits a UTF-8 sequence. NULL clears it. */
 void ph_bridge_publish_room(struct Bridge *b,const ph_room *room){
     unsigned n=room?room->count:0;if(n>BRIDGE_GUESTS_MAX)n=BRIDGE_GUESTS_MAX;
+    memset(b->guest_ids,0,sizeof b->guest_ids);memset(b->guest_user_ids,0,sizeof b->guest_user_ids);
+    memset(b->guest_names,0,sizeof b->guest_names);memset(b->guest_permissions,0,sizeof b->guest_permissions);
+    memset(b->pending_ids,0,sizeof b->pending_ids);memset(b->pending_user_ids,0,sizeof b->pending_user_ids);
+    memset(b->pending_names,0,sizeof b->pending_names);
     for(unsigned i=0;i<n;i++){
         const ph_guest *g=&room->guests[i];char name[64];utf8_copy(name,sizeof name,*g->name?g->name:"Guest");
         snprintf(b->guest_titles[i],sizeof b->guest_titles[i],"%s (#%u)",name,(unsigned)g->id);
         snprintf(b->guest_details[i],sizeof b->guest_details[i],"%s · %s",g->owner?"Your account":"Invited guest",g->connected?"connected":"connecting");
         snprintf(b->guest_kick[i],sizeof b->guest_kick[i],"Kick##guest-%u",(unsigned)g->id);
-        b->guest_ids[i]=g->id;
+        b->guest_ids[i]=g->id;b->guest_user_ids[i]=g->user_id;
+        utf8_copy(b->guest_names[i],sizeof b->guest_names[i],*g->name?g->name:"Guest");
+        memcpy(b->guest_permissions[i],g->permissions,sizeof b->guest_permissions[i]);
     }
     b->guest_count=n;
+    unsigned pending=room?room->pending_count:0;if(pending>BRIDGE_GUESTS_MAX)pending=BRIDGE_GUESTS_MAX;
+    for(unsigned i=0;i<pending;i++){
+        const ph_pending *p=&room->pending[i];b->pending_ids[i]=p->id;b->pending_user_ids[i]=p->user_id;
+        utf8_copy(b->pending_names[i],sizeof b->pending_names[i],*p->name?p->name:"Guest");
+    }
+    b->pending_count=pending;
     if(room&&room->width&&room->height){
         const char *codec=!strcmp(room->codec,"h265")?"H.265":!strcmp(room->codec,"h264")?"H.264":room->codec;
         snprintf(b->stream,sizeof b->stream,"Streaming %ux%u · %u FPS · %u Mbps%s%s",room->width,room->height,room->fps,room->bitrate,*codec?" · ":"",codec);

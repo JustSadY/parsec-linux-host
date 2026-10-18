@@ -28,20 +28,18 @@ bant genişliği, codec, kalite, sabit FPS, hoparlör susturma, pano paylaşım�
 boot başlangıcı bulunur. Değişiklikler **otomatik kaydedilir** (ayrı bir Kaydet
 düğmesi yoktur); uygulamak için **Stop hosting → Start hosting** yap.
 
-Hosting açıkken **Hosting Enabled** satırının altında canlı yayın bilgisi
-(çözünürlük, FPS, bitrate, codec) ve bağlı misafirler listelenir. Her misafirin
-yanında hesap türü (kendi hesabın / davetli) ve bağlantı durumu görünür;
-**Kick** o misafiri çıkarır. Liste lowlatd'nin yerel oturum kanalından okunur,
-yönetici doğrulaması istemez.
+Computers sayfasında bu host'un kartı uygulamanın kendi **This Computer / Share**
+kartıdır. **Share** davet bağlantısını oluşturup uygulamanın panosuna kopyalar;
+aynı kartta görünen bağlantı seçilip tekrar kopyalanabilir. Kırmızı **X / Stop
+Sharing** yeni davetleri kapatır. Bu işlemler host'u yeniden başlatmaz ve mevcut
+misafirleri düşürmez. Başka bilgisayarların **Connect** düğmeleri korunur.
 
-Arkadaşını davet etmek için **Friend Access → Create share link**: bir
-`https://parsec.gg/g/...` davet linki üretilip panoya kopyalanır. Link, host'u
-yalnız o linke sahip misafirin bağlanabileceği davetli moduna alır; **Copy
-link** yeniden kopyalar, **Stop sharing** kapatır. Kendi bilgisayarına "Connect"
-ile bağlanmaya gerek yoktur — paylaşım bu link iledir. Aynı bilgisayardan
-kendi host'una bağlanma denemesi (ekranı kendine yansıtan döngü) host tarafında
-reddedilir ve günlüğe yazılır; Computers listesindeki kart yine **Connect**
-gösterir, ama bağlantı kurulmaz.
+Başka bir Parsec hesabından gelen davet isteği, uygulamanın mevcut **GUESTS →
+WAITING TO CONNECT → Accept / Reject** menüsünü açar. Karar verilmeden bağlantı
+kurulmaz; istek 30 saniyede sona erer. Bağlanan misafirin aynı menüsünden **Kick**
+ve canlı **Gamepad / Keyboard / Mouse** izinleri yönetilir. Kendi hesabının
+uzaktaki cihazı otomatik kabul edilir. Aynı Linux bilgisayarından kendi host'una
+bağlanma döngüsü backend tarafından reddedilir.
 
 Yönetim işlemleri Polkit ile Linux yönetici doğrulaması ister. Pencereyi
 kapatmak host servisini durdurmaz.
@@ -58,7 +56,7 @@ yakalama ve kodlama ekranın bağlı olduğu GPU'da yapılır. Sürücüler, VFI
 make test
 make source
 makepkg -s
-sudo pacman -U ./parsec-linux-host-0.2.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./parsec-linux-host-0.3.0-1-x86_64.pkg.tar.zst
 ```
 
 `makepkg` root olarak çalıştırılmaz. Paket `parsec-bin` / `parsec` ile çakışır ve
@@ -70,7 +68,7 @@ edilmiş vendor kaynak depoya eklenmez.
 Yeni kurulum varsayılanları: hosting/boot kapalı; 60 FPS, 10 Mbps, H.264, en düşük
 gecikme, otomatik GPU/encoder, mevcut ekran modu, hoparlör susturma ve pano metin
 paylaşımı açık; arkadaş paylaşımı kapalıdır. Paylaşım kapalıyken yalnız hesap
-sahibi bağlanabilir; davet linki açıkken linke sahip bir misafir de bağlanabilir.
+sahibi bağlanabilir; davet linki açıkken linke sahip bir misafir host onayıyla bağlanabilir.
 Eşzamanlı istemci sayısı birdir. İsim boşsa sistem adı kullanılır. FPS bir
 sınırdır, ölçülmüş sonuç veya ekran Hz ayarı değildir.
 
@@ -88,8 +86,8 @@ Repository: [JustSadY/parsec-linux-host](https://github.com/JustSadY/parsec-linu
 python3 tools/prepare-aur.py --repo https://github.com/JustSadY/parsec-linux-host
 ```
 
-`dist/aur/PKGBUILD`, `.SRCINFO` ve `.install` üretilir. Kaynak arşivi `v0.2.0`
-GitHub release'ine `parsec-linux-host-0.2.0.tar.gz` adıyla eklenmelidir. AUR'a
+`dist/aur/PKGBUILD`, `.SRCINFO` ve `.install` üretilir. Kaynak arşivi `v0.3.0`
+GitHub release'ine `parsec-linux-host-0.3.0.tar.gz` adıyla eklenmelidir. AUR'a
 bu üç paketleme dosyasını gönder; kaynak arşivi veya proprietary binary gönderme.
 AUR indirme adresi release yayımlandığında çalışır. Üretici kendiliğinden
 GitHub release'i veya AUR paketi yayımlamaz.
@@ -101,17 +99,19 @@ Only module **150-105c**, original SHA-256
 is admitted. Another version is rejected before patching. The official loader
 comes from the separately pinned 150-104a installer; see `upstream.json`.
 
-The C payload uses observed private function RVAs. Two exact sites add the Host
-tab and its real controls. Code is RX; mutable state is in a separate RW segment.
+The C payload uses observed private function RVAs. Two sites add the Host
+tab and its controls; ten confined call-site hooks adapt the existing local
+computer card, sharing actions and guest menus to the Linux service. Code is RX; mutable state is in a separate RW segment.
 The vendor host-start stub and capability response remain unchanged. A compiled
-C worker manages public settings, friend invite sharing and fixed helper
+C worker manages public settings, friend invite sharing, approvals, per-guest permissions and fixed helper
 actions; it does not render the page or implement streaming. The launcher pins
 the module using bubblewrap.
 Profile settings persist; module auto-updates remain pinned until a compatible
 package is built. This launch is not advertised as a security sandbox.
 
-Private ABI compatibility and sustained video/audio/input/frame pacing require
-real peer testing. Windows virtual displays, resolution/orientation changes,
+The actual native card and guest popup have been exercised in an isolated
+Xvfb session with fixture records. A real second-account end-to-end connection
+and sustained video/audio/input/frame pacing still require peer testing. Windows virtual displays, resolution/orientation changes,
 approved-app restrictions, desktop locking and CPU host encoding are unavailable.
 
 For development: `make native`, then `make run` uses a disposable profile with

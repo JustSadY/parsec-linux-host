@@ -24,10 +24,13 @@ parser.add_argument('--native-host', action='store_true', help='Attach the read-
 parser.add_argument('--helper', help='Read-only status helper override for migration tests')
 parser.add_argument('--debug', action='store_true', help='Collect a bounded crash backtrace for this disposable test')
 parser.add_argument('--control-file', type=Path, help='Read private test commands from an append-only file')
+parser.add_argument('--bridge-file', type=Path, help='Private fixture bridge; no system worker is started')
+parser.add_argument('--lab', type=Path, help='Unique private output directory for this run')
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
-lab = root / '.cache/gui-test'
+lab = args.lab or root / '.cache/gui-test'
 lab.mkdir(parents=True, exist_ok=True)
+lab.chmod(0o700)
 profile = Path.home() / '.parsec'
 module = args.module.resolve(strict=True)
 number = next(i for i in range(91, 120) if not Path(f'/tmp/.X11-unix/X{i}').exists())
@@ -69,6 +72,10 @@ try:
         # vendor harness no longer drives it. Use the read-only launcher path.
         print('For the native Host bridge use: parsec-linux-host open --read-only',
               file=sys.stderr)
+    if args.bridge_file:
+        bridge_file = str(args.bridge_file.resolve(strict=True))
+        command += ['--bind', bridge_file, bridge_file, '--setenv',
+                    'PARSEC_NATIVE_HOST_BRIDGE', bridge_file]
     command += ['--die-with-parent', '--']
     if args.debug:
         command += ['gdb', '--batch', '-ex', 'set pagination off', '-ex', 'set print frame-arguments none',
@@ -98,6 +105,15 @@ try:
                 pass
         print(json.dumps(dict(snapshot=str(destination), windows=windows, client_exit=client.poll())), flush=True)
     time.sleep(6)
+    # Normalize this disposable app window's saved position for screenshots.
+    for win in root_window.query_tree().children:
+        try:
+            if win.get_wm_name() == 'Parsec':
+                win.configure(x=0, y=55)
+        except Exception:
+            pass
+    connection.sync()
+    time.sleep(.2)
     snapshot('initial')
     print('READY: click X Y, shot LABEL, or quit (private Xvfb display only)', flush=True)
     def commands():

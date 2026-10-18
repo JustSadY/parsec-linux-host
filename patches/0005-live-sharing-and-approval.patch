@@ -1,0 +1,992 @@
+Live native sharing and owner approval over the existing session/tray channel.
+
+LOWLAT_SHARE_FILE enables an authoritative, fail-closed invite policy. A
+regular JSON file of at most 4096 bytes must explicitly enable sharing with
+exactly eight hexadecimal secret bytes (the native Join parser's width).
+The 250ms poll changes only the signaling advertisement; existing guests
+are never restarted or disconnected when the link is enabled or revoked.
+
+Non-owner offers wait for an owner-UID-authenticated tray decision before
+Admission::new_attempt or begin_p2p. The queue holds eight entries, expires
+after 30 seconds, and publishes only numeric IDs, account IDs and bounded
+names. IDs are not reused across signaling reconnects. Cancelled, expired
+and replayed decisions cannot admit a guest. Sharing rotation/revocation
+rejects outstanding requests. Standalone --secret CLI behavior is preserved
+when LOWLAT_SHARE_FILE is absent. Same-machine refusal from patch 0004 stays.
+
+Existing tray frames gain {"approve":id}, {"reject":id}, and a complete
+{"permissions":{"id":guest,"keyboard":bool,"mouse":bool,"gamepad":bool}}.
+State gains pending:[{id,user_id,name}], sharing_enabled, and per-guest
+permissions. The share secret is never included in tray state or logs.
+
+diff --git a/crates/daemon/src/app.rs b/crates/daemon/src/app.rs
+index a171f51..f8b4716 100644
+--- a/crates/daemon/src/app.rs
++++ b/crates/daemon/src/app.rs
+@@ -396,7 +396,15 @@ pub(crate) fn on_action(
+     who: crate::channel::Peer,
+     body: &[u8],
+ ) {
++    if !crate::channel::owner_allows(who.uid, std::env::var("LOWLAT_OWNER_UID").ok().as_deref()) {
++        return;
++    }
+     let by = format!("tray pid={} uid={}", who.pid, who.uid);
++    if let Some((guest, permissions)) = crate::channel::is_permissions(body) {
++        if seam.set_permissions(guest, permissions) {
++            lowlat_common::log_info!("lowlatd: guest {guest} permissions changed, asked by {by}");
++        }
++    }
+     if let Some(guest) = crate::channel::is_kick(body) {
+         if seam.kick_guest(guest, KICKED) {
+             lowlat_common::log_info!("lowlatd: guest {guest} kicked, asked by {by}");
+@@ -478,6 +486,11 @@ pub(crate) fn state(
+                 "owner": guest.owner,
+                 "name": peers.get(&guest.attempt).map_or("", |peer| peer.name.as_str()),
+                 "connected": established.contains(&guest.attempt),
++                "permissions": {
++                    "keyboard": guest.permissions.keyboard,
++                    "mouse": guest.permissions.pointer,
++                    "gamepad": guest.permissions.gamepad,
++                },
+             })
+         })
+         .collect();
+diff --git a/crates/daemon/src/channel.rs b/crates/daemon/src/channel.rs
+index 6ac4fdb..8b43ecd 100644
+--- a/crates/daemon/src/channel.rs
++++ b/crates/daemon/src/channel.rs
+@@ -372,6 +372,20 @@ pub(crate) fn is_kick(body: &[u8]) -> Option<u32> {
+         .and_then(|guest| u32::try_from(guest).ok())
+ }
+ 
++/// A complete permission set from the owner; absent or mistyped booleans do
++/// not acquire their permissive default from the remote offer protocol.
++pub(crate) fn is_permissions(body: &[u8]) -> Option<(u32, lowlat_host::inject::Permissions)> {
++    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
++    let value = value.get("permissions")?;
++    let id = u32::try_from(value.get("id")?.as_u64()?).ok()?;
++    let permissions = lowlat_host::inject::Permissions {
++        keyboard: value.get("keyboard")?.as_bool()?,
++        pointer: value.get("mouse")?.as_bool()?,
++        gamepad: value.get("gamepad")?.as_bool()?,
++    };
++    (id != 0).then_some((id, permissions))
++}
++
+ /// A tray's request to change the stream, in the shape a guest's own
+ /// request has, so the two are answered by one rule.
+ pub(crate) fn config(config: &serde_json::Value) -> Vec<u8> {
+@@ -517,7 +531,7 @@ pub(crate) fn greet(stream: &mut UnixStream) -> Option<Greeting> {
+ }
+ 
+ /// The packaged root runner supplies this from its root-owned desktop owner.
+-fn owner_allows(uid: u32, owner: Option<&str>) -> bool {
++pub(crate) fn owner_allows(uid: u32, owner: Option<&str>) -> bool {
+     uid == 0 || owner.is_none_or(|text| text.parse::<u32>() == Ok(uid))
+ }
+ 
+@@ -955,6 +969,26 @@ pub(crate) fn write_frame(stream: &mut UnixStream, body: &[u8]) -> std::io::Resu
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn owner_permission_commands_require_a_complete_boolean_set() {
++        let (guest, permissions) = is_permissions(
++            br#"{"permissions":{"id":7,"keyboard":true,"mouse":false,"gamepad":false}}"#,
++        )
++        .expect("complete command");
++        assert_eq!(guest, 7);
++        assert!(permissions.keyboard);
++        assert!(!permissions.pointer);
++        assert!(!permissions.gamepad);
++        for body in [
++            br#"{"permissions":{"id":0,"keyboard":true,"mouse":true,"gamepad":true}}"#.as_slice(),
++            br#"{"permissions":{"id":7,"keyboard":true,"mouse":true}}"#,
++            br#"{"permissions":{"id":7,"keyboard":1,"mouse":true,"gamepad":true}}"#,
++            br#"{"permissions":{"id":4294967296,"keyboard":true,"mouse":true,"gamepad":true}}"#,
++        ] {
++            assert!(is_permissions(body).is_none());
++        }
++    }
++
+     fn pair() -> (UnixStream, UnixStream) {
+         UnixStream::pair().expect("a socket pair")
+     }
+diff --git a/crates/daemon/src/main.rs b/crates/daemon/src/main.rs
+index 5d0b882..2e27074 100644
+--- a/crates/daemon/src/main.rs
++++ b/crates/daemon/src/main.rs
+@@ -30,6 +30,7 @@ mod session_side;
+ #[cfg(windows)]
+ #[path = "session_side/windows.rs"]
+ mod session_side;
++mod sharing;
+ #[cfg(target_os = "linux")]
+ mod sni;
+ 
+diff --git a/crates/daemon/src/service.rs b/crates/daemon/src/service.rs
+index 7e69c77..57865e2 100644
+--- a/crates/daemon/src/service.rs
++++ b/crates/daemon/src/service.rs
+@@ -295,7 +295,7 @@ pub(crate) fn occupancy(seam: &Admission) -> u32 {
+     u32::try_from(seam.occupancy()).unwrap_or(u32::MAX)
+ }
+ 
+-fn advertisement(name: &str, capacity: u32, players: u32) -> ConnUpdate {
++fn advertisement(name: &str, capacity: u32, players: u32, secret: &str) -> ConnUpdate {
+     ConnUpdate {
+         loader_v: 0,
+         service_v: 0,
+@@ -311,9 +311,7 @@ fn advertisement(name: &str, capacity: u32, players: u32) -> ConnUpdate {
+         game_id: String::new(),
+         // A friend share secret marks the host invite-only; the signaling
+         // service then relays only guests that carry it in their invite link.
+-        secret: flag("--secret")
+-            .filter(|secret| secret.len() >= 8)
+-            .unwrap_or_default(),
++        secret: secret.to_owned(),
+         max_players: capacity,
+         players,
+         is_public: false,
+@@ -357,6 +355,93 @@ pub(crate) struct Introduced {
+     pub(crate) name: String,
+ }
+ 
++/// A refusal is sent even before a transport exists. A pending offer never
++/// registers with Admission and therefore owns no socket, capture or input.
++fn decline(client: &mut Client, offer: &OfferRelay) -> Result<(), Box<dyn std::error::Error>> {
++    let empty = no_credentials();
++    client.send(
++        "answer",
++        &Answer {
++            approved: false,
++            attempt_id: &offer.attempt_id,
++            data: AnswerData {
++                base: HostDataBase::default(),
++                creds: &empty,
++            },
++            to: &offer.from,
++        },
++    )?;
++    Ok(())
++}
++
++/// The sole path from an automatic owner decision or a manual guest decision
++/// to the transport. Called only after this application's approval policy.
++fn admit(
++    client: &mut Client,
++    seam: &mut Admission,
++    peers: &mut std::collections::HashMap<String, Introduced>,
++    offer: OfferRelay,
++) -> Result<(), Box<dyn std::error::Error>> {
++    let transport = if offer.data.wants_web() {
++        Transport::Web
++    } else {
++        Transport::Bud
++    };
++    let peer = Peer {
++        ufrag: offer.data.creds.ice_ufrag.clone(),
++        pwd: offer.data.creds.ice_pwd.clone(),
++        aes256: offer.data.creds.aes256.clone(),
++        transport,
++        fingerprint: offer.data.creds.fingerprint.clone(),
++        permissions: lowlat_host::inject::Permissions {
++            keyboard: offer.permissions.keyboard,
++            pointer: offer.permissions.mouse,
++            gamepad: offer.permissions.gamepad,
++        },
++        owner: offer.is_owner,
++    };
++    let refusal = match seam.new_attempt(&offer.attempt_id, peer) {
++        Ok(()) => match seam.begin_p2p(&offer.attempt_id, 0) {
++            Ok(host) => {
++                let creds = Credentials {
++                    aes256: (!host.aes256.is_empty()).then_some(host.aes256),
++                    fingerprint: host.fingerprint,
++                    ice_ufrag: host.ufrag,
++                    ice_pwd: host.pwd,
++                };
++                client.send(
++                    "answer",
++                    &Answer {
++                        approved: true,
++                        attempt_id: &offer.attempt_id,
++                        data: AnswerData {
++                            base: HostDataBase::default(),
++                            creds: &creds,
++                        },
++                        to: &offer.from,
++                    },
++                )?;
++                peers.insert(
++                    offer.attempt_id,
++                    Introduced {
++                        from: offer.from,
++                        name: offer.user.name,
++                    },
++                );
++                lowlat_common::log_info!("lowlatd: answered, guest bound to port {}", host.port);
++                return Ok(());
++            }
++            Err(error) => error.to_string(),
++        },
++        Err(error) => error.to_string(),
++    };
++    lowlat_common::log_info!("lowlatd: declining {}: {refusal}", offer.attempt_id);
++    decline(client, &offer)?;
++    seam.end_connection(&offer.attempt_id);
++    peers.remove(&offer.attempt_id);
++    Ok(())
++}
++
+ /// Raise this process's priority class to high, once, as the established host
+ /// does for its own.
+ ///
+@@ -844,13 +929,19 @@ async fn session_loop(
+     // told. Zero until a display has been opened, which is also what a host
+     // with no stream has.
+     let mut announced: (u32, u32) = (0, 0);
++    let mut sharing = crate::sharing::Policy::new(
++        std::env::var_os("LOWLAT_SHARE_FILE").map(std::path::PathBuf::from),
++        flag("--secret"),
++        flag_set("--owner-only"),
++    );
++    let mut pending = crate::sharing::PendingOffers::default();
+     // Resent on every connection, not just the first: the service takes it as
+     // the frame that registers the session, so a reconnect without it is a
+     // connection the service has not associated with this host.
+     let _ = client.send_text("__ping__");
+     client.send(
+         "conn_update",
+-        &advertisement(name, capacity, occupancy(seam)),
++        &advertisement(name, capacity, occupancy(seam), sharing.secret()),
+     )?;
+     lowlat_common::log_info!(
+         "lowlatd: advertised as {name:?}, capacity {capacity}, {} guest(s) carried over",
+@@ -877,87 +968,22 @@ async fn session_loop(
+                     "offer_relay" => {
+                         let offer: OfferRelay = serde_json::from_value(message.payload)?;
+                         lowlat_common::log_info!("lowlatd: offer {} from {}", offer.attempt_id, offer.from);
+-                        peers.insert(
+-                            offer.attempt_id.clone(),
+-                            Introduced {
+-                                from: offer.from.clone(),
+-                                name: offer.user.name.clone(),
+-                            },
+-                        );
+-
+-                        // Admission is the application's decision, and this
+-                        // application's policy is capacity alone.
+-                        // **Silence is not a refusal.** A declined answer is a
+-                        // wire event the peer acts on at once; no answer at all
+-                        // leaves it connecting indefinitely, because nothing in
+-                        // the protocol reports a host that never replied. Every
+-                        // offer gets an answer, including the ones we turn down.
+-                        let refusal = if reject_all {
+-                            Some("policy".to_string())
+-                        } else if flag_set("--owner-only") && !offer.is_owner {
+-                            Some("owner-only".to_string())
+-                        } else {
+-                            let transport = if offer.data.wants_web() {
+-                                Transport::Web
+-                            } else {
+-                                Transport::Bud
+-                            };
+-                            seam.new_attempt(&offer.attempt_id, Peer {
+-                                ufrag: offer.data.creds.ice_ufrag,
+-                                pwd: offer.data.creds.ice_pwd,
+-                                aes256: offer.data.creds.aes256,
+-                                transport,
+-                                fingerprint: offer.data.creds.fingerprint,
+-                                permissions: lowlat_host::inject::Permissions {
+-                                    keyboard: offer.permissions.keyboard,
+-                                    pointer: offer.permissions.mouse,
+-                                    gamepad: offer.permissions.gamepad,
+-                                },
+-                                owner: offer.is_owner,
+-                            })
+-                            .err()
+-                            .map(|error| error.to_string())
+-                        };
+-                        if let Some(why) = refusal {
+-                            lowlat_common::log_info!("lowlatd: declining {}: {why}", offer.attempt_id);
+-                            let empty = no_credentials();
+-                            client.send("answer", &Answer {
+-                                approved: false,
+-                                attempt_id: &offer.attempt_id,
+-                                data: AnswerData {
+-                                    base: HostDataBase::default(),
+-                                    creds: &empty,
+-                                },
+-                                to: &offer.from,
+-                            })?;
+-                            seam.end_connection(&offer.attempt_id);
+-                            peers.remove(&offer.attempt_id);
++                        // Repeated relay frames must neither replace an
++                        // outstanding approval nor terminate a live attempt.
++                        if peers.contains_key(&offer.attempt_id) || pending.contains(&offer.attempt_id) {
+                             continue;
+                         }
+-                        // **Zero: no opinion.** This service manages no
+-                        // gateway mapping and no port pool, so the configured
+-                        // base is the right start and the seam reports where it
+-                        // landed.
+-                        let host = seam.begin_p2p(&offer.attempt_id, 0)?;
+-
+-                        let creds = Credentials {
+-                            // Empty means the attempt keys from the
+-                            // fingerprint, and the answer omits the field a
+-                            // peer of that generation cannot read.
+-                            aes256: (!host.aes256.is_empty()).then_some(host.aes256),
+-                            fingerprint: host.fingerprint,
+-                            ice_ufrag: host.ufrag,
+-                            ice_pwd: host.pwd,
+-                        };
+-                        client.send("answer", &Answer {
+-                            approved: true,
+-                            attempt_id: &offer.attempt_id,
+-                            data: AnswerData { base: HostDataBase::default(), creds: &creds },
+-                            to: &offer.from,
+-                        })?;
+-                        lowlat_common::log_info!("lowlatd: answered, guest bound to port {}", host.port);
+-
+-
++                        match sharing.admission(offer.is_owner, reject_all) {
++                            crate::sharing::Admission::Refuse => decline(&mut client, &offer)?,
++                            crate::sharing::Admission::Automatic => admit(&mut client, seam, peers, offer)?,
++                            crate::sharing::Admission::Pending => {
++                                let refused = offer.clone();
++                                if let Err(why) = pending.insert(offer, std::time::Instant::now()) {
++                                    lowlat_common::log_info!("lowlatd: declining {}: {why}", refused.attempt_id);
++                                    decline(&mut client, &refused)?;
++                                }
++                            }
++                        }
+                     }
+                     "candex_relay" => {
+                         let relay: CandexRelay = serde_json::from_value(message.payload)?;
+@@ -994,9 +1020,10 @@ async fn session_loop(
+                     "offer_cancel_relay" => {
+                         let cancel: CancelRelay = serde_json::from_value(message.payload)?;
+                         lowlat_common::log_info!("lowlatd: cancelled {}", cancel.attempt_id);
++                        pending.cancel(&cancel.attempt_id);
+                         seam.end_connection(&cancel.attempt_id);
+                         peers.remove(&cancel.attempt_id);
+-                        client.send("conn_update", &advertisement(name, capacity, occupancy(seam)))?;
++                        client.send("conn_update", &advertisement(name, capacity, occupancy(seam), sharing.secret()))?;
+                     }
+                     // The service closes with a reason, and the reason is the
+                     // only thing that distinguishes a bad session from a host
+@@ -1031,7 +1058,43 @@ async fn session_loop(
+             app::announce_guests(seam);
+         }
+ 
+-        side.pass(seam, settings, peers, established);
++        // Apply live link changes before processing any owner decision. A
++        // revoked/rotated link invalidates outstanding requests, while already
++        // connected guests and their capture/transport remain untouched.
++        let now = std::time::Instant::now();
++        if sharing.poll(now) {
++            for offer in pending.drain() {
++                decline(&mut client, &offer)?;
++            }
++            client.send(
++                "conn_update",
++                &advertisement(name, capacity, occupancy(seam), sharing.secret()),
++            )?;
++        }
++        for offer in pending.expire(now) {
++            decline(&mut client, &offer)?;
++        }
++        let decisions = side.pass(
++            seam,
++            settings,
++            peers,
++            established,
++            &pending,
++            sharing.enabled(),
++        );
++        for (id, approved) in decisions {
++            let Some(offer) = pending.take(id, now) else {
++                continue;
++            };
++            if approved
++                && sharing.admission(offer.is_owner, reject_all)
++                    == crate::sharing::Admission::Pending
++            {
++                admit(&mut client, seam, peers, offer)?;
++            } else {
++                decline(&mut client, &offer)?;
++            }
++        }
+ 
+         while let Some(received) = seam.poll_event() {
+             // **Said out loud, because the queue is bounded.** An application
+@@ -1104,7 +1167,7 @@ async fn session_loop(
+                         peers.remove(&attempt);
+                         client.send(
+                             "conn_update",
+-                            &advertisement(name, capacity, occupancy(seam)),
++                            &advertisement(name, capacity, occupancy(seam), sharing.secret()),
+                         )?;
+                         continue;
+                     }
+@@ -1115,7 +1178,7 @@ async fn session_loop(
+                     app::announce_guests(seam);
+                     client.send(
+                         "conn_update",
+-                        &advertisement(name, capacity, occupancy(seam)),
++                        &advertisement(name, capacity, occupancy(seam), sharing.secret()),
+                     )?;
+                 }
+                 // The enum is non-exhaustive, so a catch-all is required across
+@@ -1135,7 +1198,7 @@ async fn session_loop(
+                     app::announce_guests(seam);
+                     client.send(
+                         "conn_update",
+-                        &advertisement(name, capacity, occupancy(seam)),
++                        &advertisement(name, capacity, occupancy(seam), sharing.secret()),
+                     )?;
+                 }
+                 // **Answered here and nowhere below.** The identifier and the
+diff --git a/crates/daemon/src/session_side/linux.rs b/crates/daemon/src/session_side/linux.rs
+index 39733c5..cf95708 100644
+--- a/crates/daemon/src/session_side/linux.rs
++++ b/crates/daemon/src/session_side/linux.rs
+@@ -555,7 +555,10 @@ impl Side {
+         settings: &app::Settings,
+         peers: &HashMap<String, Introduced>,
+         established: &HashSet<String>,
+-    ) {
++        pending: &crate::sharing::PendingOffers,
++        sharing_enabled: bool,
++    ) -> Vec<(u64, bool)> {
++        let mut decisions = Vec::new();
+         // **A lease, held while somebody is watching.** The screen blanking
+         // during a session is the desktop doing exactly what it was told, and
+         // nothing below the session can argue with it, so the session is asked
+@@ -602,7 +605,17 @@ impl Side {
+         // frames wait in their own queue for the same reason a session's do:
+         // only this loop may touch the guests.
+         for (who, asked) in channel::take_acted() {
+-            app::on_action(seam, settings, who, &asked);
++            if let Some(decision) = crate::sharing::decision(&asked) {
++                // The socket already authenticates the owner UID at hello;
++                // check again so an owner change cannot leave an old tray
++                // authorized to accept a new remote guest.
++                if channel::owner_allows(who.uid, std::env::var("LOWLAT_OWNER_UID").ok().as_deref())
++                {
++                    decisions.push(decision);
++                }
++            } else {
++                app::on_action(seam, settings, who, &asked);
++            }
+         }
+         // **Said on every pass while somebody is looking, and sent on
+         // change.** The room and the picture both move without an event this
+@@ -610,7 +623,10 @@ impl Side {
+         // the channel decides whether it differs from what it last sent.
+         // Nothing is worked out for nobody.
+         if channel::trays() > 0 {
+-            channel::state(&app::state(seam, &mut self.shown, peers, established));
++            let mut state = app::state(seam, &mut self.shown, peers, established);
++            state["pending"] = pending.state();
++            state["sharing_enabled"] = sharing_enabled.into();
++            channel::state(&state);
+         }
+ 
+         // **The display belongs to whichever session is in front of it, and
+@@ -675,6 +691,7 @@ impl Side {
+         if self.placed.is_some() {
+             seam.set_place(self.placed);
+         }
++        decisions
+     }
+ }
+ 
+diff --git a/crates/daemon/src/session_side/windows.rs b/crates/daemon/src/session_side/windows.rs
+index 3afd4fd..f5607e9 100644
+--- a/crates/daemon/src/session_side/windows.rs
++++ b/crates/daemon/src/session_side/windows.rs
+@@ -24,7 +24,10 @@ impl Side {
+         _settings: &app::Settings,
+         _peers: &HashMap<String, Introduced>,
+         _established: &HashSet<String>,
+-    ) {
++        _pending: &crate::sharing::PendingOffers,
++        _sharing_enabled: bool,
++    ) -> Vec<(u64, bool)> {
++        Vec::new()
+     }
+ }
+ 
+diff --git a/crates/daemon/src/sharing.rs b/crates/daemon/src/sharing.rs
+new file mode 100644
+index 0000000..6caf350
+--- /dev/null
++++ b/crates/daemon/src/sharing.rs
+@@ -0,0 +1,464 @@
++//! Live invite policy and a bounded manual-approval queue. No transport is
++//! allocated until a queued offer is explicitly accepted by the desktop owner.
++
++use lowlat_kessel::message::OfferRelay;
++use std::io::Read as _;
++use std::path::{Path, PathBuf};
++use std::sync::atomic::{AtomicU64, Ordering};
++use std::time::{Duration, Instant};
++
++const FILE_LIMIT: u16 = 4096;
++const POLL: Duration = Duration::from_millis(250);
++const APPROVAL_TIMEOUT: Duration = Duration::from_secs(30);
++const PENDING_LIMIT: usize = 8;
++// Kept outside a signaling session: reconnecting must not recycle an ID a
++// native window might still have in its old Accept/Reject button.
++static NEXT_ID: AtomicU64 = AtomicU64::new(1);
++// Native Jansson's json_int_t is signed, even though our IDs are unsigned.
++const MAX_ID: u64 = 0x7fff_ffff_ffff_ffff;
++
++fn next_id(counter: &AtomicU64) -> Result<u64, &'static str> {
++    // `fetch_update` is available on the project's minimum Rust; its renamed
++    // alias is not yet available on every supported compiler.
++    #[allow(deprecated)]
++    counter
++        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
++            (id < MAX_ID).then(|| id + 1)
++        })
++        .map_err(|_| "approval IDs exhausted")
++}
++
++#[derive(Clone, Debug, Default, PartialEq, Eq)]
++struct Share {
++    enabled: bool,
++    secret: String,
++}
++
++impl Share {
++    fn parse(bytes: &[u8]) -> Self {
++        if bytes.len() > usize::from(FILE_LIMIT) {
++            return Self::default();
++        }
++        let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
++            return Self::default();
++        };
++        if value.get("enabled").and_then(serde_json::Value::as_bool) != Some(true) {
++            return Self::default();
++        }
++        let Some(secret) = value.get("secret").and_then(serde_json::Value::as_str) else {
++            return Self::default();
++        };
++        // The vendor's native Join parser consumes exactly eight secret bytes.
++        if secret.len() != 8 || !secret.bytes().all(|byte| byte.is_ascii_hexdigit()) {
++            return Self::default();
++        }
++        Self {
++            enabled: true,
++            secret: secret.to_owned(),
++        }
++    }
++
++    fn read(path: &Path) -> Self {
++        let mut options = std::fs::OpenOptions::new();
++        options.read(true);
++        // A broken or replaced state file must not block the signaling loop
++        // on a FIFO, and a link must not redirect this root-owned input.
++        #[cfg(target_os = "linux")]
++        {
++            use std::os::unix::fs::OpenOptionsExt as _;
++            options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
++        }
++        let Ok(file) = options.open(path) else {
++            return Self::default();
++        };
++        if !file.metadata().is_ok_and(|meta| meta.is_file()) {
++            return Self::default();
++        }
++        let mut bytes = Vec::new();
++        if file
++            .take(u64::from(FILE_LIMIT) + 1)
++            .read_to_end(&mut bytes)
++            .is_err()
++        {
++            return Self::default();
++        }
++        Self::parse(&bytes)
++    }
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(crate) enum Admission {
++    Refuse,
++    Automatic,
++    Pending,
++}
++
++/// File mode is deliberately different from the old --secret CLI mode. A
++/// missing, disabled, malformed or unreadable file always means owner-only.
++pub(crate) struct Policy {
++    path: Option<PathBuf>,
++    share: Share,
++    owner_only: bool,
++    polled: Instant,
++}
++
++impl Policy {
++    pub(crate) fn new(path: Option<PathBuf>, secret: Option<String>, owner_only: bool) -> Self {
++        let share = path.as_deref().map_or_else(
++            || Share {
++                enabled: false,
++                secret: secret.filter(|text| text.len() >= 8).unwrap_or_default(),
++            },
++            Share::read,
++        );
++        Self {
++            path,
++            share,
++            owner_only,
++            polled: Instant::now(),
++        }
++    }
++
++    /// True only when the effective secret/enabled state changed. No host
++    /// restart, capture rebuild or existing-guest operation belongs here.
++    pub(crate) fn poll(&mut self, now: Instant) -> bool {
++        if now.saturating_duration_since(self.polled) < POLL {
++            return false;
++        }
++        self.polled = now;
++        let Some(path) = self.path.as_deref() else {
++            return false;
++        };
++        let updated = Share::read(path);
++        let changed = self.share != updated;
++        self.share = updated;
++        changed
++    }
++
++    pub(crate) fn enabled(&self) -> bool {
++        self.share.enabled
++    }
++    pub(crate) fn secret(&self) -> &str {
++        &self.share.secret
++    }
++
++    pub(crate) fn admission(&self, owner: bool, reject_all: bool) -> Admission {
++        if reject_all {
++            return Admission::Refuse;
++        }
++        if owner {
++            return Admission::Automatic;
++        }
++        if self.path.is_some() {
++            // skip_approval from signaling never bypasses this policy.
++            if self.enabled() {
++                Admission::Pending
++            } else {
++                Admission::Refuse
++            }
++        } else if self.owner_only {
++            Admission::Refuse
++        } else {
++            // Preserve the old standalone CLI's policy outside file mode.
++            Admission::Automatic
++        }
++    }
++}
++
++struct Pending {
++    id: u64,
++    offer: OfferRelay,
++    expires: Instant,
++}
++
++#[derive(Default)]
++pub(crate) struct PendingOffers {
++    entries: Vec<Pending>,
++}
++
++impl PendingOffers {
++    pub(crate) fn contains(&self, attempt: &str) -> bool {
++        self.entries
++            .iter()
++            .any(|entry| entry.offer.attempt_id == attempt)
++    }
++
++    pub(crate) fn insert(&mut self, offer: OfferRelay, now: Instant) -> Result<u64, &'static str> {
++        if self.contains(&offer.attempt_id) {
++            return Err("duplicate offer");
++        }
++        if self.entries.len() >= PENDING_LIMIT {
++            return Err("approval queue full");
++        }
++        // Exhaustion fails closed, never wrapping onto an earlier decision.
++        let id = next_id(&NEXT_ID)?;
++        self.entries.push(Pending {
++            id,
++            offer,
++            expires: now + APPROVAL_TIMEOUT,
++        });
++        Ok(id)
++    }
++
++    pub(crate) fn cancel(&mut self, attempt: &str) -> bool {
++        let before = self.entries.len();
++        self.entries
++            .retain(|entry| entry.offer.attempt_id != attempt);
++        before != self.entries.len()
++    }
++
++    pub(crate) fn take(&mut self, id: u64, now: Instant) -> Option<OfferRelay> {
++        let at = self
++            .entries
++            .iter()
++            .position(|entry| entry.id == id && now < entry.expires)?;
++        Some(self.entries.remove(at).offer)
++    }
++
++    pub(crate) fn expire(&mut self, now: Instant) -> Vec<OfferRelay> {
++        let mut expired = Vec::new();
++        let mut at = 0;
++        while at < self.entries.len() {
++            if now >= self.entries[at].expires {
++                expired.push(self.entries.remove(at).offer);
++            } else {
++                at += 1
++            }
++        }
++        expired
++    }
++
++    pub(crate) fn drain(&mut self) -> Vec<OfferRelay> {
++        self.entries.drain(..).map(|entry| entry.offer).collect()
++    }
++
++    pub(crate) fn state(&self) -> serde_json::Value {
++        self.entries.iter().map(|entry| serde_json::json!({
++            "id": entry.id,
++            "user_id": entry.offer.user.id,
++            // Remote names are display data, not commands or markup. Bound
++            // the copy sent to every native window as well as the queue.
++            "name": entry.offer.user.name.chars().filter(|c| !c.is_control()).take(96).collect::<String>(),
++        })).collect()
++    }
++}
++
++/// Exactly one numeric decision per tray frame. Reject ambiguous frames so a
++/// malformed request cannot approve merely because one key happened to parse.
++#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
++pub(crate) fn decision(body: &[u8]) -> Option<(u64, bool)> {
++    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
++    let object = value.as_object()?;
++    if object.len() != 1 {
++        return None;
++    }
++    let (id, approved) = if let Some(id) = object.get("approve") {
++        (id.as_u64()?, true)
++    } else {
++        (object.get("reject")?.as_u64()?, false)
++    };
++    (id != 0).then_some((id, approved))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn offer(attempt: &str) -> OfferRelay {
++        serde_json::from_value(serde_json::json!({
++            "attempt_id": attempt, "from": "remote-peer", "is_owner": false,
++            "skip_approval": true, "user": {"id": 42, "name": "Guest"},
++            "data": {"creds": {"ice_ufrag":"ufrag", "ice_pwd":"password"}}
++        }))
++        .expect("offer")
++    }
++
++    #[test]
++    fn absent_invalid_and_oversize_states_are_disabled() {
++        for input in [
++            b"".as_slice(),
++            b"null",
++            b"{}",
++            b"[]",
++            b"{",
++            b"{\"enabled\":true}",
++            b"{\"enabled\":1,\"secret\":\"01234567\"}",
++            b"{\"enabled\":true,\"secret\":\"short\"}",
++            b"{\"enabled\":true,\"secret\":\"0123456x\"}",
++        ] {
++            assert_eq!(Share::parse(input), Share::default());
++        }
++        let mut oversized = br#"{"enabled":true,"secret":"01234567"}"#.to_vec();
++        oversized.resize(4097, b' ');
++        assert_eq!(Share::parse(&oversized), Share::default());
++        assert_eq!(
++            Share::read(Path::new("/no-such-lowlat-share-state")),
++            Share::default()
++        );
++    }
++
++    #[test]
++    fn valid_hex_only_and_explicit_enable_are_required() {
++        let live = Share::parse(br#"{"enabled":true,"secret":"89aBcDeF"}"#);
++        assert!(live.enabled);
++        assert_eq!(live.secret, "89aBcDeF");
++        assert_eq!(
++            Share::parse(br#"{"enabled":false,"secret":"0123456789abcdef"}"#),
++            Share::default()
++        );
++        assert_eq!(
++            Share::parse(br#"{"enabled":true,"secret":"0123456789abcdef"}"#),
++            Share::default()
++        );
++    }
++
++    #[test]
++    fn native_signed_id_exhaustion_never_wraps_or_reuses() {
++        let counter = AtomicU64::new(MAX_ID - 1);
++        assert_eq!(next_id(&counter), Ok(MAX_ID - 1));
++        assert!(next_id(&counter).is_err());
++        assert!(next_id(&counter).is_err());
++        assert_eq!(counter.load(Ordering::Relaxed), MAX_ID);
++    }
++
++    #[test]
++    fn reader_rejects_oversize_files_and_non_regular_paths() {
++        let path = std::env::temp_dir().join(format!(
++            "lowlat-share-bounds-{}-{}",
++            std::process::id(),
++            next_id(&NEXT_ID).unwrap()
++        ));
++        std::fs::create_dir(&path).unwrap();
++        assert_eq!(Share::read(&path), Share::default());
++        let file = path.join("state.json");
++        let mut bytes = br#"{"enabled":true,"secret":"01234567"}"#.to_vec();
++        bytes.resize(4096, b' ');
++        std::fs::write(&file, &bytes).unwrap();
++        assert!(Share::read(&file).enabled);
++        bytes.push(b' ');
++        std::fs::write(&file, bytes).unwrap();
++        assert_eq!(Share::read(&file), Share::default());
++        #[cfg(target_os = "linux")]
++        {
++            std::fs::write(&file, br#"{"enabled":true,"secret":"01234567"}"#).unwrap();
++            let link = path.join("linked.json");
++            std::os::unix::fs::symlink(&file, &link).unwrap();
++            assert_eq!(Share::read(&link), Share::default());
++        }
++        std::fs::remove_dir_all(&path).unwrap();
++    }
++
++    #[test]
++    fn file_mode_admits_only_owners_automatically() {
++        let mut policy = Policy::new(
++            Some(PathBuf::from("/no-such-lowlat-share-state")),
++            Some("legacysecret".into()),
++            false,
++        );
++        assert_eq!(policy.admission(true, false), Admission::Automatic);
++        assert_eq!(policy.admission(false, false), Admission::Refuse);
++        assert_eq!(policy.secret(), "");
++        policy.share = Share::parse(br#"{"enabled":true,"secret":"01234567"}"#);
++        assert_eq!(policy.admission(false, false), Admission::Pending);
++        assert_eq!(policy.admission(true, true), Admission::Refuse);
++        // The queue retains skip_approval but the policy never reads it.
++        assert!(offer("one").skip_approval);
++    }
++
++    #[test]
++    fn standalone_cli_keeps_its_existing_policy() {
++        assert_eq!(
++            Policy::new(None, None, true).admission(false, false),
++            Admission::Refuse
++        );
++        let policy = Policy::new(None, Some("old-cli-secret".into()), false);
++        assert_eq!(policy.admission(false, false), Admission::Automatic);
++        assert_eq!(policy.secret(), "old-cli-secret");
++    }
++
++    #[test]
++    fn decisions_are_numeric_unambiguous_and_nonzero() {
++        assert_eq!(decision(br#"{"approve":9}"#), Some((9, true)));
++        assert_eq!(decision(br#"{"reject":9}"#), Some((9, false)));
++        for frame in [
++            br#"{"approve":0}"#.as_slice(),
++            br#"{"approve":-1}"#,
++            br#"{"approve":"9"}"#,
++            br#"{"approve":9,"reject":9}"#,
++            br#"{"approve":1.1}"#,
++            b"null",
++        ] {
++            assert_eq!(decision(frame), None);
++        }
++    }
++
++    #[test]
++    fn decisions_are_one_shot_cancelled_and_expired_ids_never_admit() {
++        let now = Instant::now();
++        let mut pending = PendingOffers::default();
++        let first = pending.insert(offer("first"), now).unwrap();
++        assert_eq!(pending.take(first, now).unwrap().attempt_id, "first");
++        assert!(pending.take(first, now).is_none());
++        let cancelled = pending.insert(offer("cancelled"), now).unwrap();
++        assert!(pending.cancel("cancelled"));
++        assert!(pending.take(cancelled, now).is_none());
++        let expired = pending.insert(offer("expired"), now).unwrap();
++        assert!(pending.take(expired, now + APPROVAL_TIMEOUT).is_none());
++        assert_eq!(pending.expire(now + APPROVAL_TIMEOUT).len(), 1);
++        assert!(pending.take(expired, now).is_none());
++        let next = PendingOffers::default()
++            .insert(offer("next-session"), now)
++            .unwrap();
++        assert!(first < cancelled && cancelled < expired && expired < next);
++    }
++
++    #[test]
++    fn pending_queue_is_bounded_duplicate_safe_and_revocable() {
++        let now = Instant::now();
++        let mut pending = PendingOffers::default();
++        let first = pending.insert(offer("0"), now).unwrap();
++        assert!(pending.insert(offer("0"), now).is_err());
++        for index in 1..PENDING_LIMIT {
++            pending.insert(offer(&index.to_string()), now).unwrap();
++        }
++        assert!(pending.insert(offer("overflow"), now).is_err());
++        assert_eq!(pending.state().as_array().unwrap().len(), PENDING_LIMIT);
++        assert_eq!(pending.state()[0]["user_id"], 42);
++        assert_eq!(pending.drain().len(), PENDING_LIMIT);
++        assert!(pending.take(first, now).is_none());
++    }
++
++    #[test]
++    fn names_are_bounded_display_data() {
++        let mut incoming = offer("one");
++        incoming.user.name = format!("\n{}\u{1b}", "ç".repeat(200));
++        let mut pending = PendingOffers::default();
++        pending.insert(incoming, Instant::now()).unwrap();
++        assert_eq!(
++            pending.state()[0]["name"].as_str().unwrap().chars().count(),
++            96
++        );
++    }
++
++    #[test]
++    fn polling_is_live_bounded_and_sends_only_effective_changes() {
++        let path = std::env::temp_dir().join(format!(
++            "lowlat-share-test-{}-{}",
++            std::process::id(),
++            NEXT_ID.fetch_add(1, Ordering::Relaxed)
++        ));
++        std::fs::write(&path, br#"{"enabled":true,"secret":"01234567"}"#).unwrap();
++        let mut policy = Policy::new(Some(path.clone()), None, true);
++        let start = policy.polled;
++        assert!(policy.enabled());
++        assert!(!policy.poll(start + POLL));
++        std::fs::write(&path, br#"{"enabled":true,"secret":"89abcdef"}"#).unwrap();
++        assert!(!policy.poll(start + POLL + Duration::from_millis(1)));
++        assert!(policy.poll(start + POLL * 2));
++        assert_eq!(policy.secret(), "89abcdef");
++        std::fs::remove_file(&path).unwrap();
++        assert!(policy.poll(start + POLL * 3));
++        assert!(!policy.enabled());
++        assert!(!policy.poll(start + POLL * 4));
++    }
++}

@@ -8,6 +8,7 @@
 #include "runtime.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -88,6 +89,29 @@ int ph_tray_kick(ph_tray *t, uint32_t guest, ph_error *e) {
     return send_frame(t->fd, body, e);
 }
 
+int ph_tray_decide(ph_tray *t, uint64_t pending, int accept, ph_error *e) {
+    if (t->fd < 0)
+        return ph_fail(e, "Host service channel unavailable");
+    if (!pending || pending > INT64_MAX || (accept != 0 && accept != 1))
+        return ph_fail(e, "Invalid connection request");
+    char body[64];
+    snprintf(body, sizeof body, "{\"%s\":%" PRIu64 "}", accept ? "approve" : "reject", pending);
+    return send_frame(t->fd, body, e);
+}
+int ph_tray_permissions(ph_tray *t, uint32_t guest, const uint8_t permissions[3], ph_error *e) {
+    if (t->fd < 0)
+        return ph_fail(e, "Host service channel unavailable");
+    for (unsigned i = 0; i < 3; i++)
+        if (permissions[i] > 1)
+            return ph_fail(e, "Invalid guest permissions");
+    char body[160];
+    snprintf(body, sizeof body,
+        "{\"permissions\":{\"id\":%u,\"gamepad\":%s,\"keyboard\":%s,\"mouse\":%s}}",
+        guest, permissions[0] ? "true" : "false", permissions[1] ? "true" : "false",
+        permissions[2] ? "true" : "false");
+    return send_frame(t->fd, body, e);
+}
+
 static void copy_text(char *out, size_t size, const char *in) {
     size_t n = in ? strlen(in) : 0;
     if (n >= size)
@@ -128,9 +152,38 @@ int ph_tray_parse_state(const char *body, size_t length, ph_room *room) {
             continue;
         ph_guest *g = &room->guests[room->count++];
         g->id = (uint32_t)json_integer_value(id);
+        json_t *user_id = json_object_get(guest, "user_id");
+        json_int_t user = json_integer_value(user_id);
+        g->user_id = json_is_integer(user_id) && user >= 0 && user <= UINT32_MAX ? (uint32_t)user : 0;
+        json_t *permissions = json_object_get(guest, "permissions");
+        const char *keys[] = {"gamepad", "keyboard", "mouse"};
+        for (unsigned j = 0; j < 3; j++)
+            g->permissions[j] = json_is_true(json_object_get(permissions, keys[j]));
         g->owner = json_is_true(json_object_get(guest, "owner"));
         g->connected = json_is_true(json_object_get(guest, "connected"));
         copy_text(g->name, sizeof g->name, json_string_value(json_object_get(guest, "name")));
+    }
+    json_t *pending;
+    json_array_foreach(json_object_get(state, "pending"), i, pending) {
+        if (room->pending_count >= BRIDGE_GUESTS_MAX)
+            break;
+        json_t *id_value = json_object_get(pending, "id");
+        json_int_t id = json_integer_value(id_value);
+        if (!json_is_integer(id_value) || id <= 0)
+            continue;
+        /* Reject duplicate IDs so one native menu never targets two rows. */
+        int duplicate = 0;
+        for (unsigned j = 0; j < room->pending_count; j++)
+            if (room->pending[j].id == (uint64_t)id)
+                duplicate = 1;
+        if (duplicate)
+            continue;
+        ph_pending *p = &room->pending[room->pending_count++];
+        p->id = (uint64_t)id;
+        json_t *user_id = json_object_get(pending, "user_id");
+        json_int_t user = json_integer_value(user_id);
+        p->user_id = json_is_integer(user_id) && user >= 0 && user <= UINT32_MAX ? (uint32_t)user : 0;
+        copy_text(p->name, sizeof p->name, json_string_value(json_object_get(pending, "name")));
     }
     json_decref(frame);
     return 0;

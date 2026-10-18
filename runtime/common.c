@@ -28,6 +28,7 @@ void ph_context_init(ph_context *c) {
     c->systemctl="/usr/bin/systemctl";c->journalctl="/usr/bin/journalctl";
     c->helper=PH_LIB "/hostctl";c->pkexec="/usr/bin/pkexec";
     c->dropin="/etc/systemd/system/parsec-host.service.d";
+    c->peer_cache="/run/parsec-host/host-peer.json";
     c->euid=geteuid();c->caller_uid=c->euid?c->euid:caller();c->run=ph_run;c->request=ph_request;
 }
 json_t *ph_read_json(const char *path,size_t limit,int private_file,ph_error *e) {

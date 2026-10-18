@@ -25,4 +25,5 @@ shutil.copyfile(root / 'packaging/parsec-linux-host.install', dest / 'parsec-lin
 with (dest / '.SRCINFO').open('w') as output:
     subprocess.run(['makepkg', '--printsrcinfo'], cwd=dest, stdout=output, check=True)
 print('Generated:', dest)
-print('Upload the source archive as the v0.2.0 GitHub release asset BEFORE submitting the AUR recipe.')
+version = re.search(r'^pkgver=(.+)$', recipe, re.M).group(1)
+print(f'Upload the source archive as the v{version} GitHub release asset BEFORE submitting the AUR recipe.')

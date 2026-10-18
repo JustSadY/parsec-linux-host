@@ -1,0 +1,27 @@
+{
+  "version": "0.3.0",
+  "vendor_module": "150-105c",
+  "bridge_abi": 6,
+  "runtime_c_checks": 107,
+  "native_adapter_suite": "passed",
+  "rust_daemon_passed": 57,
+  "rust_daemon_ignored": 4,
+  "rust_core_passed": 334,
+  "package_build": "passed",
+  "package_sha256": "26dbfabea4f787b836e469004c9e89248adbf522cec55969886705ff2824336e",
+  "module_sha256": "49b5faa7b4b86e0c4c885d03f473025b9a3afa017bf28ebda4850ecf37567d8c",
+  "source_sha256": "628a60cd3d00c67381191fea4cf9b345b72e56dd7c717447dff0fd8b2204f587",
+  "installed": "parsec-linux-host 0.3.0-1",
+  "service": "active/running/success",
+  "verified_local_registration": true,
+  "native_gui_observed": [
+    "local crown and This Computer / Share in native Computers grid",
+    "share click dispatch",
+    "inline invite field and Stop Sharing dispatch",
+    "Accept popup with full decision id",
+    "connected guest permissions and Kick menu"
+  ],
+  "gui_environment": "private Xvfb, vendor profile overlay, fixture bridge; no real guest",
+  "external_second_account_connection": "not tested",
+  "sustained_streaming": "not tested"
+}

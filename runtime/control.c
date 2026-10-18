@@ -52,12 +52,16 @@ json_t *ph_status(ph_context *c,ph_error *e){
 }
 struct response {char *text;size_t size;};
 static size_t response_write(char *ptr,size_t size,size_t nmemb,void *userdata){struct response *r=userdata;size_t n=size*nmemb;if(n>131072-r->size)return 0;char *p=realloc(r->text,r->size+n+1);if(!p)return 0;r->text=p;memcpy(p+r->size,ptr,n);r->size+=n;p[r->size]=0;return n;}
+static int request_progress(void *opaque,curl_off_t down_total,curl_off_t down_now,curl_off_t up_total,curl_off_t up_now){
+    (void)down_total;(void)down_now;(void)up_total;(void)up_now;ph_context *c=opaque;return c->cancel&&*c->cancel;
+}
 json_t *ph_request(ph_context *c,const char *method,const char *endpoint,json_t *body,const char *token,ph_error *e){
-    (void)c;if(strcmp(endpoint,"/v2/auth")&&strcmp(endpoint,"/me")&&strcmp(endpoint,"/v2/hosts?mode=desktop")){ph_fail(e,"Unsupported account endpoint");return NULL;}
+    if(strcmp(endpoint,"/v2/auth")&&strcmp(endpoint,"/me")&&strcmp(endpoint,"/v2/hosts?mode=desktop")){ph_fail(e,"Unsupported account endpoint");return NULL;}
     CURL *curl=curl_easy_init();if(!curl){ph_fail(e,"Cannot initialize account connection");return NULL;}
     char url[256];snprintf(url,sizeof url,"https://kessel-api.parsec.app%s",endpoint);struct curl_slist *headers=NULL;headers=curl_slist_append(headers,"Content-Type: application/json");headers=curl_slist_append(headers,"Accept: application/json");
     char *auth=NULL,*payload=body?json_dumps(body,JSON_COMPACT):NULL;if(token){if(asprintf(&auth,"Authorization: Bearer %s",token)<0)auth=NULL;if(auth)headers=curl_slist_append(headers,auth);}
-    struct response response={0};curl_easy_setopt(curl,CURLOPT_URL,url);curl_easy_setopt(curl,CURLOPT_CUSTOMREQUEST,method);curl_easy_setopt(curl,CURLOPT_HTTPHEADER,headers);curl_easy_setopt(curl,CURLOPT_CONNECTTIMEOUT,10L);curl_easy_setopt(curl,CURLOPT_TIMEOUT,25L);curl_easy_setopt(curl,CURLOPT_NOSIGNAL,1L);curl_easy_setopt(curl,CURLOPT_PROTOCOLS_STR,"https");curl_easy_setopt(curl,CURLOPT_WRITEFUNCTION,response_write);curl_easy_setopt(curl,CURLOPT_WRITEDATA,&response);
+    struct response response={0};curl_easy_setopt(curl,CURLOPT_URL,url);curl_easy_setopt(curl,CURLOPT_CUSTOMREQUEST,method);curl_easy_setopt(curl,CURLOPT_HTTPHEADER,headers);curl_easy_setopt(curl,CURLOPT_CONNECTTIMEOUT,!strcmp(endpoint,"/v2/hosts?mode=desktop")?3L:10L);curl_easy_setopt(curl,CURLOPT_TIMEOUT,!strcmp(endpoint,"/v2/hosts?mode=desktop")?6L:25L);curl_easy_setopt(curl,CURLOPT_NOSIGNAL,1L);curl_easy_setopt(curl,CURLOPT_PROTOCOLS_STR,"https");curl_easy_setopt(curl,CURLOPT_WRITEFUNCTION,response_write);curl_easy_setopt(curl,CURLOPT_WRITEDATA,&response);
+    curl_easy_setopt(curl,CURLOPT_NOPROGRESS,0L);curl_easy_setopt(curl,CURLOPT_XFERINFOFUNCTION,request_progress);curl_easy_setopt(curl,CURLOPT_XFERINFODATA,c);
     if(payload)curl_easy_setopt(curl,CURLOPT_POSTFIELDS,payload);
     CURLcode code=curl_easy_perform(curl);long http=0;curl_easy_getinfo(curl,CURLINFO_RESPONSE_CODE,&http);json_t *answer=NULL;
     if(code!=CURLE_OK)ph_fail(e,"Parsec account connection failed");else if(http<200||http>=300)ph_fail(e,"Parsec login: HTTP %ld",http);else{answer=json_loads(response.text?response.text:"",JSON_REJECT_DUPLICATES,NULL);if(!json_is_object(answer)){json_decref(answer);answer=NULL;ph_fail(e,"Invalid account response");}}

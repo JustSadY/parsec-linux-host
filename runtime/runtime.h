@@ -17,7 +17,7 @@ typedef struct { int code; char *out; } ph_process;
 typedef struct ph_context ph_context;
 struct ph_context {
     const char *etc, *lib, *drm, *systemctl, *journalctl, *helper, *pkexec;
-    const char *dropin;
+    const char *dropin, *peer_cache;
     uid_t euid, caller_uid;
     volatile sig_atomic_t *cancel;
     int (*run)(ph_context *, char *const [], const char *, char *const [], int, ph_process *, ph_error *);
@@ -52,12 +52,20 @@ int ph_launcher_main(int, char **);
  * Frames are a little-endian u32 length and a JSON body. */
 #define PH_SESSION_SOCKET "/run/parsec-host/session"
 typedef struct {
-    uint32_t id;
+    uint32_t id, user_id;
+    uint8_t permissions[3];
     int owner, connected;
     char name[128];
 } ph_guest;
 typedef struct {
+    uint64_t id;
+    uint32_t user_id;
+    char name[128];
+} ph_pending;
+typedef struct {
     ph_guest guests[BRIDGE_GUESTS_MAX];
+    ph_pending pending[BRIDGE_GUESTS_MAX];
+    unsigned pending_count;
     unsigned count, width, height, fps, bitrate;
     char codec[8];
 } ph_room;
@@ -71,6 +79,8 @@ int ph_tray_open(ph_tray *, const char *path, ph_error *);
 int ph_tray_adopt(ph_tray *, int fd, ph_error *);
 int ph_tray_read(ph_tray *, ph_room *);
 int ph_tray_kick(ph_tray *, uint32_t guest, ph_error *);
+int ph_tray_decide(ph_tray *, uint64_t pending, int accept, ph_error *);
+int ph_tray_permissions(ph_tray *, uint32_t guest, const uint8_t permissions[3], ph_error *);
 void ph_tray_close(ph_tray *);
 int ph_tray_parse_state(const char *body, size_t length, ph_room *);
 void ph_bridge_publish_room(struct Bridge *, const ph_room *);
@@ -96,6 +106,9 @@ void ph_bridge_message(struct Bridge *, const char *);
 /* Friend invite-link sharing. Strong definitions in share.c replace the
  * harmless weak defaults in control.c and bridge.c. */
 char *ph_share_secret(ph_context *);
+char *ph_peer_select(json_t *, const char *machine_id);
+char *ph_peer_resolve(ph_context *, const char *token);
+int ph_peer_publish(ph_context *, const char *peer, ph_error *);
 json_t *ph_share_status(ph_context *, ph_error *);
 json_t *ph_share_dispatch(ph_context *, const char *, json_t *, ph_error *);
 void ph_bridge_extra_refresh(struct Bridge *, json_t *);

@@ -5,6 +5,8 @@ runtime:
 	$(MAKE) -C runtime all
 test: runtime
 	$(MAKE) -C runtime test
+	$(CC) -std=c11 -O2 -Wall -Wextra tests/native.c -o .cache/native-tests
+	.cache/native-tests
 native:
 	python3 tools/fetch-module.py
 	python3 tools/build-native.py --module .cache/vendor/parsecd-150-105c.so --output .cache/native

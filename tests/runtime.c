@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <pwd.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -77,10 +79,10 @@ static void test_resolve_and_argv(void) {
     CHECK(!has_arg(args, "--no-host-mute"), "default keeps speakers muted");
     ph_argv_free(args);
 
-    char **shared = ph_host_argv(&c, settings, chosen, "0123456789abcdef", &e);
+    char **shared = ph_host_argv(&c, settings, chosen, "01234567", &e);
     CHECK(shared != NULL, "host argv builds with a secret");
     CHECK(has_arg(shared, "--secret"), "sharing passes --secret");
-    CHECK(has_arg(shared, "0123456789abcdef"), "sharing passes the secret value");
+    CHECK(has_arg(shared, "01234567"), "sharing passes the secret value");
     CHECK(!has_arg(shared, "--owner-only"), "sharing relaxes owner-only");
     ph_argv_free(shared);
 
@@ -125,14 +127,14 @@ static void test_share_secret(void) {
     snprintf(path, sizeof path, "%s/share.json", dir);
 
     FILE *f = fopen(path, "w");
-    fputs("{\"enabled\":true,\"secret\":\"0123456789abcdef\",\"link\":\"\"}", f);
+    fputs("{\"enabled\":true,\"secret\":\"01234567\",\"link\":\"\"}", f);
     fclose(f);
     char *secret = ph_share_secret(&c);
-    CHECK(secret && !strcmp(secret, "0123456789abcdef"), "enabled secret is returned");
+    CHECK(secret && !strcmp(secret, "01234567"), "enabled secret is returned");
     free(secret);
 
     f = fopen(path, "w");
-    fputs("{\"enabled\":false,\"secret\":\"0123456789abcdef\"}", f);
+    fputs("{\"enabled\":false,\"secret\":\"01234567\"}", f);
     fclose(f);
     secret = ph_share_secret(&c);
     CHECK(secret == NULL, "disabled share returns no secret");
@@ -151,8 +153,11 @@ static void test_share_secret(void) {
 
 static const char room_frame[] =
     "{\"state\":{\"output\":\"DP-1\",\"width\":1920,\"height\":1080,\"fps\":60,\"bitrate\":10,"
-    "\"codec\":\"h264\",\"guests\":[{\"id\":3,\"owner\":true,\"name\":\"lykia\",\"connected\":true},"
-    "{\"id\":4,\"owner\":false,\"name\":\"friend\\nx\",\"connected\":false}]}}";
+    "\"codec\":\"h264\",\"guests\":[{\"id\":3,\"user_id\":123,\"owner\":true,\"name\":\"lykia\",\"connected\":true,"
+    "\"permissions\":{\"gamepad\":true,\"keyboard\":true,\"mouse\":true}},"
+    "{\"id\":4,\"user_id\":456,\"owner\":false,\"name\":\"friend\\nx\",\"connected\":false,"
+    "\"permissions\":{\"gamepad\":true,\"keyboard\":false,\"mouse\":false}}],"
+    "\"pending\":[{\"id\":9007199254740993,\"user_id\":789,\"name\":\"Misafir\"}]}}";
 
 static void test_tray_state(void) {
     ph_room room;
@@ -161,6 +166,11 @@ static void test_tray_state(void) {
     CHECK(room.guests[0].owner && room.guests[0].connected, "owner connected");
     CHECK(!room.guests[1].owner && !room.guests[1].connected, "friend connecting");
     CHECK(!strcmp(room.guests[1].name, "friend?x"), "control characters are not drawn");
+    CHECK(room.guests[0].user_id == 123 && room.guests[1].user_id == 456, "guest user ids");
+    CHECK(room.guests[0].permissions[1] && room.guests[1].permissions[0] &&
+          !room.guests[1].permissions[1], "guest permissions parsed without upgrading guests");
+    CHECK(room.pending_count == 1 && room.pending[0].id == UINT64_C(9007199254740993) &&
+          room.pending[0].user_id == 789, "pending keeps integer precision above JavaScript exact range");
     CHECK(room.width == 1920 && room.fps == 60 && !strcmp(room.codec, "h264"), "stream fields");
     CHECK(ph_tray_parse_state("{\"bye\":\"x\"}", 11, &room) == 1, "other frames are not a state");
     CHECK(ph_tray_parse_state("nope", 4, &room) == -1, "garbage is refused");
@@ -200,6 +210,21 @@ static void test_tray_channel(void) {
     CHECK(ph_tray_read(&tray, &room) == 1 && room.count == 2, "state arrives after another frame");
     CHECK(!ph_tray_kick(&tray, 4, &e), "kick is sent");
     CHECK(!frame_in(sv[1], body, sizeof body) && !strcmp(body, "{\"kick\":4}"), "kick frame");
+    CHECK(!ph_tray_decide(&tray, UINT64_C(9007199254740993), 1, &e), "approval sent");
+    CHECK(!frame_in(sv[1], body, sizeof body) &&
+          !strcmp(body, "{\"approve\":9007199254740993}"), "approval id has full precision");
+    CHECK(!ph_tray_decide(&tray, 77, 0, &e), "rejection sent");
+    CHECK(!frame_in(sv[1], body, sizeof body) && !strcmp(body, "{\"reject\":77}"), "rejection frame");
+    CHECK(ph_tray_decide(&tray, 0, 1, &e) == -1 &&
+          ph_tray_decide(&tray, UINT64_MAX, 1, &e) == -1 &&
+          ph_tray_decide(&tray, 1, 2, &e) == -1, "malformed decisions refused");
+    uint8_t permissions[3] = {1, 0, 1};
+    CHECK(!ph_tray_permissions(&tray, 4, permissions, &e), "permissions sent");
+    CHECK(!frame_in(sv[1], body, sizeof body) && !strcmp(body,
+        "{\"permissions\":{\"id\":4,\"gamepad\":true,\"keyboard\":false,\"mouse\":true}}"),
+        "permissions frame requires three booleans");
+    permissions[0] = 2;
+    CHECK(ph_tray_permissions(&tray, 4, permissions, &e) == -1, "nonboolean permission refused");
     close(sv[1]);
     CHECK(ph_tray_read(&tray, &room) == -1, "a closed channel is reported");
     ph_tray_close(&tray);
@@ -217,9 +242,16 @@ static void test_room_published(void) {
     CHECK(!strcmp(b.guest_details[0], "Your account · connected"), "owner details");
     CHECK(!strcmp(b.guest_details[1], "Invited guest · connecting"), "guest details");
     CHECK(!strcmp(b.guest_kick[1], "Kick##guest-4"), "kick button has its own id");
+    CHECK(b.guest_user_ids[0] == 123 && !strcmp(b.guest_names[1], "friend?x"),
+          "native names and user ids published");
+    CHECK(b.guest_permissions[0][2] && !b.guest_permissions[1][2], "native permissions published");
+    CHECK(b.pending_count == 1 && b.pending_ids[0] == UINT64_C(9007199254740993) &&
+          b.pending_user_ids[0] == 789 && !strcmp(b.pending_names[0], "Misafir"),
+          "native pending request published");
     CHECK(!strcmp(b.stream, "Streaming 1920x1080 · 60 FPS · 10 Mbps · H.264"), "stream line");
     ph_bridge_publish_room(&b, NULL);
-    CHECK(b.guest_count == 0 && !b.stream[0], "room cleared");
+    CHECK(b.guest_count == 0 && !b.stream[0] && b.pending_count == 0 &&
+          !b.pending_ids[0] && !b.pending_names[0][0] && !b.guest_names[0][0], "room cleared");
 }
 
 static void test_gpus_published(void) {
@@ -240,15 +272,186 @@ static void test_gpus_published(void) {
 }
 
 static void test_bridge_abi(void) {
-    CHECK(sizeof(struct Bridge) == 3352, "bridge struct size");
+    CHECK(sizeof(struct Bridge) == 4136, "bridge struct size");
     struct Bridge b;
     memset(&b, 0, sizeof b);
-    json_t *status = json_pack("{s:b,s:s}", "share_enabled", 1, "share_link",
-                               "https://parsec.gg/g/PEER/SECRET/");
+    json_t *status = json_pack("{s:b,s:s,s:s,s:s}", "share_enabled", 1,
+        "share_link", "https://untrusted.invalid/stale", "host_peer_id", "PEER",
+        "share_secret", "01234567");
     ph_bridge_extra_refresh(&b, status);
     CHECK(b.share_enabled == 1, "extra refresh copies share_enabled");
-    CHECK(!strcmp(b.share_link, "https://parsec.gg/g/PEER/SECRET/"), "extra refresh copies link");
+    CHECK(!strcmp(b.share_link, "https://parsec.gg/g/PEER/01234567/"), "extra refresh copies link");
+    CHECK(!strcmp(b.host_peer_id, "PEER") && !strcmp(b.share_secret, "01234567"),
+          "extra refresh copies native card fields");
+    json_object_set_new(status, "share_secret", json_string("0123456789abcdef"));
+    ph_bridge_extra_refresh(&b, status);
+    CHECK(!b.share_enabled && !b.share_link[0] && !b.share_secret[0],
+          "legacy long secret never yields an incompatible native link");
     json_decref(status);
+}
+
+static void test_peer_identity(void) {
+    const char *answers[] = {
+        "{\"data\":[{\"peer_id\":\"REMOTE\",\"self\":false}]}",
+        "{\"data\":[{\"peer_id\":\"REMOTE\",\"self\":false,\"device_id\":\"elsewhere\"}]}",
+        "{\"data\":[{\"peer_id\":\"A\",\"self\":true},{\"peer_id\":\"B\",\"self\":true}]}",
+        "{\"data\":[{\"peer_id\":\"../../bad\",\"self\":true}]}",
+        "{\"data\":[{\"peer_id\":\"OLD\",\"self\":true,\"online\":false}]}"
+    };
+    for (size_t i = 0; i < sizeof answers / sizeof *answers; i++) {
+        json_t *answer = json_loads(answers[i], 0, NULL);
+        char *peer = ph_peer_select(answer, "this-machine");
+        CHECK(peer == NULL, "unrelated, ambiguous, invalid or offline peer is not local");
+        free(peer);
+        json_decref(answer);
+    }
+    json_t *answer = json_loads(
+        "{\"data\":[{\"peer_id\":\"OTHER\",\"self\":false},"
+        "{\"peer_id\":\"LOCAL_ab-12\",\"self\":true}]}", 0, NULL);
+    char *peer = ph_peer_select(answer, "this-machine");
+    CHECK(peer && !strcmp(peer, "LOCAL_ab-12"), "self row wins among account hosts");
+    free(peer);
+    json_decref(answer);
+    answer = json_loads("{\"data\":[{\"peer_id\":\"LOCAL\",\"device_id\":\"this-machine\"}]}", 0, NULL);
+    peer = ph_peer_select(answer, "this-machine");
+    CHECK(peer && !strcmp(peer, "LOCAL"), "verified exact machine id fallback");
+    free(peer);
+    json_decref(answer);
+}
+static int request_count;
+static json_t *fake_request(ph_context *c, const char *method, const char *path,
+                            json_t *body, const char *token, ph_error *e) {
+    (void)c; (void)body; (void)e;
+    request_count++;
+    CHECK(!strcmp(method, "GET") && !strcmp(path, "/v2/hosts?mode=desktop") &&
+          !strcmp(token, "unit-test-session"), "peer resolver uses only scoped host listing");
+    return json_loads("{\"data\":[{\"peer_id\":\"THIS\",\"self\":true}]}", 0, NULL);
+}
+static void test_peer_status(void) {
+    char dir[] = "/tmp/parsec-peer-test-XXXXXX";
+    CHECK(mkdtemp(dir) != NULL, "peer fixture directory");
+    ph_context c;
+    ph_context_init(&c);
+    c.etc = dir;
+    char peer_path[512];
+    snprintf(peer_path, sizeof peer_path, "%s/host-peer.json", dir);
+    c.peer_cache = peer_path;
+    c.request = fake_request;
+    ph_error e = {0};
+    request_count = 0;
+    char *peer = ph_peer_resolve(&c, "unit-test-session");
+    CHECK(peer && !strcmp(peer, "THIS") && request_count == 1, "peer resolves with host session");
+    CHECK(!ph_peer_publish(&c, peer, &e), "public host peer cache published");
+    free(peer);
+    json_t *status = ph_share_status(&c, &e);
+    CHECK(!strcmp(json_string_value(json_object_get(status, "host_peer_id")), "THIS") &&
+          !json_is_true(json_object_get(status, "share_enabled")), "host identity exists when sharing is off");
+    json_decref(status);
+    char path[512];
+    snprintf(path, sizeof path, "%s/share.json", dir);
+    FILE *f = fopen(path, "w");
+    fputs("{\"enabled\":true,\"secret\":\"a0b1c2d3\",\"link\":\"https://wrong.invalid\"}", f);
+    fclose(f);
+    status = ph_share_status(&c, &e);
+    CHECK(!strcmp(json_string_value(json_object_get(status, "share_link")),
+                  "https://parsec.gg/g/THIS/a0b1c2d3/"), "link derives from exact peer and native secret");
+    json_decref(status);
+    CHECK(!ph_peer_publish(&c, NULL, &e), "host peer cache removed on stop");
+    status = ph_share_status(&c, &e);
+    CHECK(!*json_string_value(json_object_get(status, "host_peer_id")) &&
+          !*json_string_value(json_object_get(status, "share_link")), "stopped host has no stale peer link");
+    json_decref(status);
+    volatile sig_atomic_t cancelled = 1;
+    c.cancel = &cancelled;
+    CHECK(ph_peer_resolve(&c, "unit-test-session") == NULL && request_count == 1,
+          "cancelled resolver makes no account request");
+    unlink(path);
+    rmdir(dir);
+}
+static int service_calls;
+static int fake_service(ph_context *c, char *const argv[], const char *input,
+                        char *const env[], int timeout, ph_process *out, ph_error *e) {
+    (void)c; (void)argv; (void)input; (void)env; (void)timeout; (void)e;
+    service_calls++;
+    out->code = 0;
+    out->out = strdup("");
+    return 0;
+}
+static void test_live_revoke(void) {
+    char dir[] = "/tmp/parsec-live-test-XXXXXX";
+    CHECK(mkdtemp(dir) != NULL, "live share fixture directory");
+    ph_context c;
+    ph_context_init(&c);
+    c.etc = dir;
+    c.euid = 0;
+    c.caller_uid = getuid();
+    c.run = fake_service;
+    char dropin[512], path[1024], peer_path[512];
+    snprintf(peer_path, sizeof peer_path, "%s/host-peer.json", dir);
+    c.peer_cache = peer_path;
+    snprintf(dropin, sizeof dropin, "%s/dropin", dir);
+    mkdir(dropin, 0755);
+    c.dropin = dropin;
+    snprintf(path, sizeof path, "%s/owner.conf", dropin);
+    FILE *f = fopen(path, "w");
+    fprintf(f, "[Service]\nGroup=%u\n", (unsigned)getgid());
+    fclose(f);
+    snprintf(path, sizeof path, "%s/share.json", dir);
+    f = fopen(path, "w");
+    fputs("{\"enabled\":true,\"secret\":\"a0b1c2d3\"}", f);
+    fclose(f);
+    service_calls = 0;
+    ph_error e = {0};
+    json_t *result = ph_share_dispatch(&c, "unshare", NULL, &e);
+    CHECK(result != NULL && !json_is_true(json_object_get(result, "share_enabled")), "live revoke succeeds");
+    CHECK(service_calls == 0, "revoking does not stop or restart a running host");
+    json_decref(result);
+    snprintf(path, sizeof path, "%s/share.json", dir);
+    struct stat st;
+    CHECK(!stat(path, &st) && (st.st_mode & 0777) == 0640 && st.st_gid == getgid(),
+          "bearer share state is restricted to desktop owner group");
+    unlink(path);
+    snprintf(path, sizeof path, "%s/owner.json", dir);
+    unlink(path);
+    snprintf(path, sizeof path, "%s/owner.conf", dropin);
+    unlink(path);
+    rmdir(dropin);
+    rmdir(dir);
+}
+static void test_pending_bounds_and_utf8(void) {
+    json_t *state = json_object(), *guests = json_array(), *pending = json_array();
+    json_object_set_new(state, "guests", guests);
+    json_object_set_new(state, "pending", pending);
+    json_array_append_new(pending, json_pack("{s:I,s:i,s:s}", "id", (json_int_t)-1,
+        "user_id", 1, "name", "invalid"));
+    json_array_append_new(pending, json_pack("{s:i,s:i,s:s}", "id", 1, "user_id", 8, "name", "same"));
+    json_array_append_new(pending, json_pack("{s:i,s:i,s:s}", "id", 1, "user_id", 9, "name", "duplicate"));
+    char unicode[193] = "";
+    for (unsigned i = 0; i < 64; i++)
+        strcat(unicode, "ş");
+    for (unsigned i = 2; i < 20; i++)
+        json_array_append_new(pending, json_pack("{s:i,s:I,s:s}", "id", i,
+            "user_id", (json_int_t)UINT32_MAX+1, "name", unicode));
+    json_array_append_new(guests, json_pack("{s:i,s:I,s:s}", "id", 1,
+        "user_id", (json_int_t)UINT32_MAX+1, "name", unicode));
+    json_t *frame = json_pack("{s:o}", "state", state);
+    char *body = json_dumps(frame, JSON_COMPACT);
+    ph_room room;
+    CHECK(!ph_tray_parse_state(body, strlen(body), &room) && room.pending_count == 8,
+          "pending list is bounded and ignores invalid and duplicate ids");
+    CHECK(room.pending[0].user_id == 8 && !room.pending[1].user_id && !room.guests[0].user_id,
+          "out of range native user ids are clamped");
+    struct Bridge b = {0};
+    ph_bridge_publish_room(&b, &room);
+    json_t *valid_pending = json_string(b.pending_names[1]);
+    json_t *valid_guest = json_string(b.guest_names[0]);
+    CHECK(strlen(b.pending_names[1]) == 30 && valid_pending != NULL &&
+          strlen(b.guest_names[0]) == 30 && valid_guest != NULL,
+          "native names stay valid UTF-8 when trimmed to 32 bytes");
+    json_decref(valid_pending);
+    json_decref(valid_guest);
+    json_decref(frame);
+    free(body);
 }
 
 int main(void) {
@@ -262,6 +465,10 @@ int main(void) {
     test_room_published();
     test_gpus_published();
     test_bridge_abi();
+    test_peer_identity();
+    test_peer_status();
+    test_live_revoke();
+    test_pending_bounds_and_utf8();
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

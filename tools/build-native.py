@@ -70,6 +70,23 @@ def build(module, output):
         + rel(0xe8, 0x3cee8 + 11, symbols['host_page'])
         + rel(0xe9, 0x3cee8 + 16, 0x3b4e0))
     patched[0x3cee8:0x3cf00] = replacement.ljust(24, b'\x90')
+    # Reuse the existing local-card renderer and native guest menus. Each
+    # original call target is checked, in addition to the full input digest.
+    hooks = [
+        (0x5d1c3, 0x4f120, 'linux_host_list'),
+        (0x5edbc, 0x53e20, 'linux_card'),
+        (0x549b4, 0x382d0, 'linux_card_action'),
+        (0x54ee3, 0x83ed0, 'linux_card_secret'),
+        (0x556b2, 0x340b0, 'linux_card_revoke'),
+        (0x5e3f1, 0x527c0, 'linux_guest_strip'),
+        (0x52999, 0x69ae0, 'linux_guest_provider'),
+        (0x53258, 0x69830, 'linux_guest_command'),
+        (0x532ae, 0x69830, 'linux_guest_command'),
+        (0x536d3, 0x69830, 'linux_guest_command'),
+    ]
+    for site, before, name in hooks:
+        assert patched[site:site + 5] == rel(0xe8, site, before), hex(site)
+        patched[site:site + 5] = rel(0xe8, site, symbols[name])
     assert patched[0x88440:0x8844a].hex() == 'f30f1efab8fbffffffc3'
     # Preserve the vendor's original capability answer; our backend is lowlat.
     assert patched[0x2cc60:0x2cc60 + 319] == original[0x2cc60:0x2cc60 + 319]
@@ -81,7 +98,9 @@ def build(module, output):
     report = dict(version='150-105c', original_sha256=EXPECTED, patched_sha256=metadata['hash'],
         ui_extension_size=code[5], ui_state_size=state[5], native_host_tab=True,
         host_engine='lowlat', host_start_stub_unchanged=True, capability_builder_unchanged=True,
-        patch_sites=['0x86164', '0x3cee8'], extension_rva=hex(code[3]))
+        patch_sites=['0x86164', '0x3cee8'] + [hex(h[0]) for h in hooks],
+        native_local_card=True, native_guest_menu=True, bridge_version=6,
+        extension_rva=hex(code[3]))
     (output / 'patch.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
 

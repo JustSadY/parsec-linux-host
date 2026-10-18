@@ -43,7 +43,7 @@ json_t *ph_settings_load(ph_context *c,ph_error *e){
 }
 char **ph_host_argv(ph_context *c,json_t *settings,json_t *device,const char *secret,ph_error *e){
     json_t *s=ph_settings_validate(settings,e);if(!s)return NULL;
-    if(secret&&*secret&&!match(secret,"^[0-9a-f]{8,64}$")){json_decref(s);ph_fail(e,"Invalid share secret");return NULL;}
+    if(secret&&*secret&&!match(secret,"^[0-9a-f]{8}$")){json_decref(s);ph_fail(e,"Invalid share secret");return NULL;}
     const char *card=json_string_value(json_object_get(device,"card"));const char *vendor=json_string_value(json_object_get(device,"vendor"));
     const char *encoder=json_string_value(json_object_get(s,"encoder")),*conversion=json_string_value(json_object_get(s,"conversion"));
     json_t *outputs=json_object_get(device,"outputs");

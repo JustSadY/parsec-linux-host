@@ -1,7 +1,7 @@
 # Maintainer: lykia
 # Local build recipe. tools/prepare-aur.py generates the release-URL variant.
 pkgname=parsec-linux-host
-pkgver=0.2.0
+pkgver=0.3.0
 pkgrel=1
 pkgdesc='Parsec client with an in-process Linux Host settings page and lowlat backend'
 arch=('x86_64')
@@ -18,9 +18,7 @@ makedepends=('cargo' 'patch' 'gcc' 'binutils' 'python' 'pkgconf' 'jansson')
 optdepends=('nvidia-utils: NVIDIA NVENC encoding'
             'mesa: OpenGL conversion and AMD/Intel graphics'
             'vulkan-radeon: AMD Vulkan capture conversion'
-            'vulkan-intel: Intel Vulkan capture conversion'
-            'wl-clipboard: copy the friend invite link on Wayland'
-            'xclip: copy the friend invite link on X11')
+            'vulkan-intel: Intel Vulkan capture conversion')
 provides=('parsec-bin=150_105c')
 conflicts=('parsec-bin' 'parsec')
 backup=('etc/parsec-host/settings.json')
@@ -33,7 +31,7 @@ source=("$pkgname-$pkgver.tar.gz"
         "parsec-linux-$_parsecver.deb::https://builds.parsec.app/package/parsec-linux.deb"
         "parsecd-$_modulever.so::https://builds.parsec.app/channel/release/binary/linux/gz/parsecd-$_modulever.so")
 noextract=("parsec-linux-$_parsecver.deb" "parsecd-$_modulever.so")
-sha256sums=('0664a739f9d22bb7a757a2fcc31834564b076c714e1ab12c5852e4d5716d1903'
+sha256sums=('628a60cd3d00c67381191fea4cf9b345b72e56dd7c717447dff0fd8b2204f587'
             'e30b4af9f4030b698bd814588fa5e8c3687b12efe823fb47f1ab78c1eb1bb55d'
             'c8a4407713d72dcb1c59f082977e81e1b9e8ffd679d0666882cde4c8a0821dd2'
             '10af623d573b566bfd3f9a5c36a509001e02be3da5a60e0f2e0f6920cb6eb983')
@@ -48,6 +46,7 @@ prepare() {
     patch -Np1 -i "$srcdir/$pkgname-$pkgver/patches/0002-probe-context-lifetime.patch"
     patch -Np1 -i "$srcdir/$pkgname-$pkgver/patches/0003-advertise-share-secret.patch"
     patch -Np1 -i "$srcdir/$pkgname-$pkgver/patches/0004-refuse-same-machine-guest.patch"
+    patch -Np1 -i "$srcdir/$pkgname-$pkgver/patches/0005-live-sharing-and-approval.patch"
     mkdir -p "$srcdir/vendor-deb"
     bsdtar -xf "$srcdir/parsec-linux-$_parsecver.deb" -C "$srcdir/vendor-deb"
     bsdtar -xf "$srcdir/vendor-deb/data.tar.zst" -C "$srcdir/vendor-deb"
@@ -72,6 +71,8 @@ check() {
     export RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=x86-64"
     export CFLAGS="${CFLAGS:-} -march=x86-64 -mtune=generic"
     make -C "$srcdir/$pkgname-$pkgver/runtime" OUT="$srcdir/runtime-build" test
+    cc -std=c11 -O2 -Wall -Wextra "$srcdir/$pkgname-$pkgver/tests/native.c" -o "$srcdir/native-tests"
+    "$srcdir/native-tests"
     cd "$srcdir/lowlat-$_lowlat"
     CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$srcdir/target}" \
         cargo test --locked -p lowlatd --bin lowlatd
