@@ -1,5 +1,11 @@
 # Native Host integration, 0.4.1
 
+This document describes the hash-pinned implementation at commit `de23106`
+(2026-10-18), together with the local verification recorded that day. It is a
+technical snapshot, **not** evidence of successful external peer playback or a
+claim that newer official Parsec modules are compatible. The README gives the
+user-facing setup and support boundaries.
+
 The runtime is compiled C (`runtime/`). The extension runs inside the actual
 vendor client, calls its native ImGui helpers and shares ABI 7 through
 `native/bridge.h`. Python is build/test tooling only.
@@ -70,13 +76,19 @@ paths are refused by patch 0004.
 
 The unprivileged C worker validates editable settings and sends fixed root-helper
 actions through Polkit. Terminal login sends credentials over stdin; the session
-is stored root-only and redacted from runner output. Root never executes project
-files. An administrator may explicitly opt in via `hostctl authorize-owner`.
+is stored root-only and redacted from runner output. Privileged execution uses
+installed, fixed-path `hostctl` / `service-runner` binaries and the installed
+`lowlatd` backend; it does not execute scripts from a checkout or an arbitrary
+path supplied by the UI. An administrator may explicitly opt in via
+`hostctl authorize-owner`.
 It writes a root-owned local Polkit rule scoped to the configured owner, an
 active local session, the exact helper path and the root target. Other pkexec
 commands and users retain their normal policy. No rule is shipped or enabled
 for all users by the package. `revoke-owner-authorization` removes that opt-in.
-Settings autosave after a stable edit, without a Save/Refresh button.
+Settings autosave after a stable edit, without a Save/Refresh button. Saving
+capture/encoding changes does not restart an active stream: the operator stops
+and starts hosting to apply them. Saving Start at Boot enables/disables the
+system unit; live Share/Stop Sharing updates do not restart an active host.
 
 The worker checks SO_PEERCRED root on `/run/parsec-host/session`. The service
 checks the configured owner's UID. Length-prefixed JSON frames carry room,
@@ -120,13 +132,17 @@ and game FPS impact remain unmeasured.
 
 ## Boot and lock screens
 
-The system service is independent of the graphical session target. Its runner
-waits for the configured connected display, with SIGTERM cancelling the wait;
+The system service is independent of the graphical session target. It can
+start before user login after Host account/owner setup and the Start at Boot
+setting enables the unit. Its runner waits for the configured connected display,
+with SIGTERM cancelling the wait;
 restarts remain enabled through display-manager or network startup delays.
 The per-user helper belongs to graphical-session.target, which ends at logout,
-not at a screen lock. Capture and input run in the system service; session-only
-facilities become available after login. This does not create a headless display
-or bypass the desktop's normal lock-screen authentication.
+not at a screen lock. The helper is recommended for desktop-session facilities,
+not a prerequisite for the system unit to start. Capture and input run in the
+system service; session-only facilities such as audio/clipboard may become
+available after login. This does not create a headless display or bypass the
+desktop's normal lock-screen authentication.
 
 The C regression suite runs as root and as an ordinary user in CI. Its share
 fixture chooses a real non-root account even inside the Arch root container;

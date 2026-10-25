@@ -1,5 +1,7 @@
 {
   "version": "0.4.1",
+  "validation_recorded_at": "2026-10-18",
+  "validation_note": "Historical build and runtime evidence. The 2026-10-25 documentation refresh changed the source archive; the package was not rebuilt or revalidated against that archive.",
   "vendor_module": "150-105c",
   "bridge_abi": 7,
   "runtime_c_checks": 127,
@@ -11,6 +13,7 @@
   "package_sha256": "f0a35c0606294add12c9fede178b211ddc561dd2af0756543186046219bd3e7c",
   "module_sha256": "73ac58ab866537cc454672fbeffc4eb98d1f6eb707b5f215df8bd89fba2ccfe8",
   "source_sha256": "82e7d447d4aa4fa84f999e4e8c89a7041ab4285587f6c569c4b8f99abfec3018",
+  "current_documentation_source_sha256": "b85ec0275ff2fce16285ad7f8cd660678e38efbf60a2051ee6209a69c462b129",
   "installed": "parsec-linux-host 0.4.1-1",
   "service": "active/running/success",
   "verified_local_registration": true,

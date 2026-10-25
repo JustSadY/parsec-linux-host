@@ -1,5 +1,10 @@
 # GPU selection and measurements
 
+These are **local, hardware-specific measurements from 2026-10-18**, not
+performance targets or a general GPU compatibility matrix. The test machine's
+drivers, PCIe topology, output and encoder capabilities are listed below. A
+second Parsec account did not receive and play these streams over the network.
+
 Capture GPU and Encoding GPU are independent persistent settings. Same as
 capture GPU (`encoding_gpu=auto`) keeps the original handle-sharing path.
 An explicitly selected AMD/Intel card uses VA-API, including a headless card.
@@ -30,7 +35,8 @@ Same 1920x1080 capture, 120 frames, H.264, 20 Mbps, serial capture/encode:
 | RX 570, cached RAM and latency quality | 18.989 ms/frame |
 
 Cached readback reduced median convert/readback from 11.954 to 1.680 ms.
-These are serial probes, not network latency or game-FPS measurements.
+These are serial probes, not network latency, sustained throughput or game-FPS
+measurements. Comparisons are valid only for the tested hardware/software setup.
 The real host stream loop was tested separately with a local seat:
 
 - H.264, requested 60 FPS: 231 frames in a five-second run including startup.
@@ -38,8 +44,9 @@ The real host stream loop was tested separately with a local seat:
 - Both streams decoded to the null sink in FFmpeg without errors.
 
 Startup took approximately 0.7 s. Short tests cannot establish sustained frame
-pacing, 144 FPS, remote playback or unchanged game performance. The user chose
-AMD encoding with these limits disclosed. Requested FPS remains a ceiling.
+pacing, 144 FPS, remote playback or unchanged game performance. The tested
+configuration chose AMD encoding with these limits disclosed. Requested FPS
+remains a ceiling, not a guarantee.
 
 Switching GPU or capture settings saves automatically and requires Stop hosting
 then Start hosting. Select Same as capture GPU to return to RTX NVENC. If the

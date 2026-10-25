@@ -8,72 +8,102 @@ The previous Qt window wrapper has been removed. No Qt, Electron, WebView,
 foreign-window embedding or second settings application is used in this version.
 This is an independent, experimental integration, not an official Parsec release.
 
-## Türkçe kullanım
+**Status (0.4.1, October 18, 2026):** This release targets Arch Linux and
+CachyOS on x86_64. The graphical client requires an X11 or XWayland session.
+The Linux host captures a connected physical display through KMS; it does not
+create a virtual or headless display. A real second-account end-to-end
+connection and sustained streaming reliability have not yet been verified.
+The UI and local encoding tests below do not guarantee operation on other
+systems or official Parsec compatibility.
 
-Uygulama menüsünden **Parsec Linux Host** aç veya `parsec-linux-host` çalıştır.
-Sol taraftaki dişli → **Host**. İlk kurulumda **Connect Host account** bir terminal
-açar; Parsec e-posta/parolanı orada gir. Doğrudan terminalden de yapılabilir:
+## Usage
+
+Open **Parsec Linux Host** from the application menu, or run
+`parsec-linux-host`. In the left sidebar, select **Settings → Host**. On first
+setup, **Connect Host account** opens a terminal for your Parsec email and
+password. You can also sign in directly from a terminal:
 
 ```sh
 parsec-linux-host login
 ```
 
-Parola ekrana veya komut argümanına konmaz. Host oturumu root'a ait
-`/etc/parsec-host/account.json` içinde 0600 izinle saklanır. Resmi istemcinin
-girişi ve lowlat Host girişi ayrı oturumlardır. Var olan `~/.parsec` istemci
-profilin korunur; proje kodu buradaki kimlik bilgilerini okumaz veya kopyalamaz.
+The password is not echoed or passed as a command-line argument. The Host
+session is stored as root-owned `/etc/parsec-host/account.json` with mode 0600.
+The official client login and lowlat Host login are separate sessions. Your
+existing `~/.parsec` client profile is preserved; this project's code does not
+read or copy its credentials.
 
-Host sayfasında isim, ekran, GPU, NVENC/VA-API, Vulkan/OpenGL dönüşümü, FPS,
-bant genişliği, codec, kalite, sabit FPS, hoparlör susturma, pano paylaşımı ve
-boot başlangıcı bulunur. Değişiklikler **otomatik kaydedilir** (ayrı bir Kaydet
-düğmesi yoktur); uygulamak için **Stop hosting → Start hosting** yap.
+The Host page provides name, display, GPU, NVENC/VA-API, Vulkan/OpenGL
+conversion, FPS, bandwidth, codec, quality, constant FPS, speaker muting,
+clipboard sharing and boot startup settings. Changes **save automatically**;
+there is no separate Save button. Use **Stop hosting → Start hosting** to apply
+capture/encoding changes. Saving **Start at Boot** updates the system unit's
+enabled state; **Share / Stop Sharing** takes effect immediately on a running
+host.
 
-Computers sayfasında bu host'un kartı uygulamanın kendi **This Computer / Share**
-kartıdır. **Share** davet bağlantısını oluşturup uygulamanın panosuna kopyalar;
-aynı kartta görünen bağlantı seçilip tekrar kopyalanabilir. Kırmızı **X / Stop
-Sharing** yeni davetleri kapatır. Bu işlemler host'u yeniden başlatmaz ve mevcut
-misafirleri düşürmez. Başka bilgisayarların **Connect** düğmeleri korunur.
+While hosting runs, the local computer appears in the native Computers grid as
+**This Computer / Share**. **Share** generates an invitation link and copies it
+through the application's clipboard. You can also select and copy the link
+displayed on the card. The red **X / Stop Sharing** disables new invitations.
+These actions do **not restart** a running host or disconnect existing guests.
+If the host is stopped, selecting **Share** first starts the service. The
+**Connect** buttons for other computers remain unchanged.
 
-Başka bir Parsec hesabından gelen davet isteği, uygulamanın mevcut **GUESTS →
-WAITING TO CONNECT → Accept / Reject** menüsünü açar. Karar verilmeden bağlantı
-kurulmaz; istek 30 saniyede sona erer. Bağlanan misafirin aynı menüsünden **Kick**
-ve canlı **Gamepad / Keyboard / Mouse** izinleri yönetilir. Kendi hesabının
-uzaktaki cihazı otomatik kabul edilir. Aynı Linux bilgisayarından kendi host'una
-bağlanma döngüsü backend tarafından reddedilir.
+An invitation request from another Parsec account opens the native **GUESTS →
+WAITING TO CONNECT → Accept / Reject** menu. Admission is blocked until a
+decision is made; requests expire after 30 seconds. The connected guest's menu
+also provides **Kick** and live **Gamepad / Keyboard / Mouse** permissions.
+Remote devices signed in to the Host owner's account are admitted automatically.
+The backend refuses a same-machine guest loop to its own Linux host.
 
-**Capture GPU** ekranın bağlı olduğu karttır. **Encoding GPU** ayrı seçilir:
-`Same as capture GPU` mevcut kartın kodlayıcısını kullanır; AMD/Intel seçildiğinde
-monitör bağlı olmasa da VA-API kodlar. Seçimler otomatik kaydedilir; **Stop
-hosting → Start hosting** ile uygulanır. Başka karta sessiz geçiş yapılmaz.
+**Capture GPU** selects the card with the connected display. **Encoding GPU**
+is independent: `Same as capture GPU` uses that card's encoder, while selecting
+a supported AMD/Intel GPU enables VA-API encoding even without a monitor on
+that GPU. Selections save automatically; apply them with **Stop hosting →
+Start hosting**. No silent fallback to another GPU is performed.
 
-RTX masaüstü + RX 570 kodlama, kareleri sistem belleği üzerinden aktarır ve
-gecikmeyi artırabilir. Bu yol sekiz bit H.264/HEVC, 4:2:0 ve Vulkan dönüşümü
-kullanır; 144 FPS garantisi vermez. RX 570 VFIO ile Windows'a verilmişken Linux
-kodlayıcısı olarak kullanılamaz. Ölçümler ve yöntem [GPU notlarında](docs/ENCODING-GPU.md).
+Capturing on an RTX GPU and encoding on an RX 570 transfers frames through
+system memory and may increase latency. This path uses eight-bit H.264/HEVC,
+4:2:0 and Vulkan conversion; it does not guarantee 144 FPS. An RX 570 assigned
+to a Windows VM through VFIO is unavailable to the Linux encoder. See the
+[GPU measurements and method](docs/ENCODING-GPU.md).
 
-İlk yönetim işlemi Polkit ile Linux yönetici doğrulaması ister. Kendi aktif,
-yerel oturumunda ayar/Share işlemlerinde tekrar parola sorulmaması için bir kez:
+The first management operation requires Linux administrator authentication
+through Polkit. To allow passwordless settings and Share operations from the
+registered owner's active local session, explicitly opt in once:
 
 ```sh
 sudo /usr/lib/parsec-linux-host/hostctl authorize-owner </dev/null
 ```
 
-Bu, yalnızca kayıtlı host sahibini ve bu uygulamanın sabit yönetim yardımcısını
-yetkilendiren bir yerel Polkit kuralı oluşturur. Genel sudo izni vermez. Geri almak:
+This creates a local Polkit rule restricted to the registered Host owner and
+this application's fixed management helper. It does not grant general sudo
+access. To revoke it:
 
 ```sh
 sudo /usr/lib/parsec-linux-host/hostctl revoke-owner-authorization </dev/null
 ```
 
-Pencereyi kapatmak host servisini durdurmaz.
+Closing the client window does not stop the Host service.
 
-Her iki GPU seçimi PCI adresiyle saklanır. `card0/card1` sırası çalışma anında çözülür; VFIO
-kartları listelenmez. Seçilen GPU'ya bağlı ekran gerekir: ekranı olmayan GPU'lar
-listenin sonunda "(no display connected)" notuyla görünür ama seçilemez, çünkü
-yakalama ekranın bağlı olduğu GPU'da yapılır; Encoding GPU seçimi bu kısıtı taşımaz. Sürücüler, VFIO,
-çekirdek parametreleri veya genel aygıt izinleri değiştirilmez.
+Both GPU selections are stored by PCI address; `card0/card1` numbering is
+resolved at runtime. VFIO-bound devices are excluded. Capture requires a
+connected display: GPUs marked `(no display connected)` appear at the end of
+the list but cannot be selected for capture. Encoding GPU does not have this
+restriction. This project does not alter drivers, VFIO assignments, kernel
+parameters or global device permissions.
 
 ## Arch / CachyOS build
+
+Prerequisites: Arch Linux or CachyOS x86_64, network access, `base-devel`,
+Rust/Cargo, Python and the `jansson`, `libcurl`, `libsystemd` and OpenSSL
+development files needed by the C tests. On a clean system, for example:
+
+```sh
+sudo pacman -S --needed base-devel git rust python jansson curl openssl systemd
+```
+
+From the repository directory, as a regular user:
 
 ```sh
 make test
@@ -82,33 +112,41 @@ makepkg -s
 sudo pacman -U ./parsec-linux-host-0.4.1-1-x86_64.pkg.tar.zst
 ```
 
-`makepkg` root olarak çalıştırılmaz. Paket `parsec-bin` / `parsec` ile çakışır ve
-resmi istemciyi de sağlar. Derleme servis başlatmaz veya hesap girişi yapmaz.
-Kaynak SHA-256 doğrulanır; native Host UI derlenip tam hash'i eşleşen vendor
-modülüne uygulanır; lowlat kaynak koddan derlenir. Vendor binary veya decompile
-edilmiş vendor kaynak depoya eklenmez.
+Do not run `makepkg` as root. This package conflicts with `parsec-bin` and
+`parsec`, and includes the official client. Building does not start services or
+sign in to an account. `make source` regenerates the source archive from the
+current files and updates its SHA-256 in the local `PKGBUILD`; `makepkg` then
+verifies that hash. The native Host UI is compiled and applied only to the
+exact hash-matched vendor module, while lowlat is built from source. Neither
+vendor binaries nor decompiled vendor source are committed to this repository.
 
-Yeni kurulum varsayılanları: hosting/boot kapalı; 60 FPS, 10 Mbps, H.264, en düşük
-gecikme, otomatik GPU/encoder, mevcut ekran modu, hoparlör susturma ve pano metin
-paylaşımı açık; arkadaş paylaşımı kapalıdır. Paylaşım kapalıyken yalnız hesap
-sahibi bağlanabilir; davet linki açıkken linke sahip bir misafir host onayıyla bağlanabilir.
-Eşzamanlı istemci sayısı birdir. İsim boşsa sistem adı kullanılır. FPS bir
-sınırdır, ölçülmüş sonuç veya ekran Hz ayarı değildir.
+Fresh-install defaults: hosting and boot startup off; 60 FPS, 10 Mbps, H.264,
+lowest latency, automatic GPU/encoder, current display mode, speaker muting and
+text clipboard sharing on; friend invitations off. With sharing disabled,
+only the account owner may connect. An invitation link permits a guest to
+request access, subject to Host approval. Only one concurrent client is
+supported. An empty Host name uses the system hostname. The FPS setting is a
+ceiling, not measured performance or a display refresh-rate setting.
 
-Boot hosting için **Start at Boot** seçeneğine ek olarak:
+**Start at Boot** enables the system service for subsequent boots. The Host
+account must be connected and a local owner registered. The service waits if
+the configured GPU/display is not yet available. For desktop-session features
+such as audio and clipboard, the per-user session helper is also recommended:
 
 ```sh
 systemctl --user enable --now parsec-host-session.service
 ```
 
-Sistem servisi giriş yapılmadan da başlar; seçili ekran/GPU henüz hazır değilse
-bekler. Masaüstü kilitlenince servis durmaz: KMS yakalama ve uinput sistem
-servisindedir; normal kilit ekranı parolası yine gerekir. Ekranı olmayan/headless
-sistemler için sanal ekran eklenmez. Oturum açılmadan pano/ses gibi kullanıcı
-hizmetleri hazır olmayabilir. Yeniden başlatma sonrası greeter davranışı ekran
-ve sürücüye bağlıdır; canlı kilit testi soğuk açılış testinin yerini tutmaz.
+The system service can start before a user signs in. Locking the desktop does
+not stop the service: KMS capture and uinput run in the system service, and
+normal lock-screen authentication remains required. No virtual display is
+created for headless systems. Session services such as clipboard and audio
+may be unavailable before login. Greeter behavior after a cold boot depends
+on the GPU/display stack; testing an already-running locked session is not a
+substitute for a cold-boot test. Capturing a locally locked KDE Wayland desktop
+was verified on one machine; remote lock-screen interaction was not verified.
 
-Misafir onaylarını görmek için istemciyi de oturum açılışında çalıştırmak istersen:
+To see guest approvals in the client, optionally start the client at login:
 
 ```sh
 mkdir -p ~/.config/autostart
@@ -124,11 +162,14 @@ Repository: [JustSadY/parsec-linux-host](https://github.com/JustSadY/parsec-linu
 python3 tools/prepare-aur.py --repo https://github.com/JustSadY/parsec-linux-host
 ```
 
-`dist/aur/PKGBUILD`, `.SRCINFO` ve `.install` üretilir. Kaynak arşivi `v0.4.1`
-GitHub release'ine `parsec-linux-host-0.4.1.tar.gz` adıyla eklenmelidir. AUR'a
-bu üç paketleme dosyasını gönder; kaynak arşivi veya proprietary binary gönderme.
-AUR indirme adresi release yayımlandığında çalışır. Üretici kendiliğinden
-GitHub release'i veya AUR paketi yayımlamaz.
+The generator creates `dist/aur/PKGBUILD`, `.SRCINFO` and `.install`, and
+recalculates the local `PKGBUILD` source hash. Upload the source archive as
+`parsec-linux-host-0.4.1.tar.gz` to a GitHub release tagged `v0.4.1`. Submit
+only those three packaging files to the AUR, not the source archive or
+proprietary binaries. The AUR download URL becomes usable only after that
+release is published. The generator does not publish a GitHub release or an
+AUR package. **As of October 25, 2026, this repository has no `v0.4.1` Git
+tag**; do not treat an AUR release as ready yet.
 
 ## Implementation and limits
 
@@ -149,8 +190,11 @@ package is built. This launch is not advertised as a security sandbox.
 
 The actual native card and guest popup have been exercised in an isolated
 Xvfb session with fixture records. A real second-account end-to-end connection
-and sustained video/audio/input/frame pacing still require peer testing. Windows virtual displays, resolution/orientation changes,
-approved-app restrictions, desktop locking and CPU host encoding are unavailable.
+and sustained video/audio/input/frame pacing still require peer testing.
+Windows virtual displays, resolution/orientation changes, approved-app
+restrictions and CPU host encoding are unavailable. Capture continuing through
+a **locally locked KDE desktop** was verified on one test machine, but remote
+lock-screen keyboard interaction and cold-boot greeter access were **not tested**.
 
 For development: `make native`, then `make run` uses a disposable profile with
 controller mutations disabled. The official loader must be installed. Ignored
