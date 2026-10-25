@@ -15,23 +15,35 @@ static const char *const codec[]={"h264","h265"},*const quality[]={"lowest-laten
 static void utf8_copy(char *dest,size_t cap,const char *src){size_t n=strlen(src);if(n>=cap)n=cap-1;while(n&&((unsigned char)src[n]&0xc0)==0x80)n--;memcpy(dest,src,n);dest[n]=0;}
 void ph_bridge_message(struct Bridge *b,const char *message){utf8_copy(b->status,sizeof b->status,message);}
 static int index_of(const char *s,const char *const *values,int count){for(int i=0;i<count;i++)if(s&&!strcmp(s,values[i]))return i;return 0;}
-static void load_form(struct Bridge *b,json_t *s){
+void ph_bridge_load_form(struct Bridge *b,json_t *s){
     utf8_copy(b->encoding_gpu,sizeof b->encoding_gpu,json_string_value(json_object_get(s,"encoding_gpu")));
     utf8_copy(b->name,sizeof b->name,json_string_value(json_object_get(s,"name")));utf8_copy(b->output,sizeof b->output,json_string_value(json_object_get(s,"output")));utf8_copy(b->gpu,sizeof b->gpu,json_string_value(json_object_get(s,"gpu")));
     b->fps=(int)json_integer_value(json_object_get(s,"fps"));b->bitrate=(int)json_integer_value(json_object_get(s,"bitrate"));
     b->codec=index_of(json_string_value(json_object_get(s,"codec")),codec,2);b->quality=index_of(json_string_value(json_object_get(s,"quality")),quality,3);b->encoder=index_of(json_string_value(json_object_get(s,"encoder")),encoder,3);b->conversion=index_of(json_string_value(json_object_get(s,"conversion")),conversion,3);
     b->autostart=json_is_true(json_object_get(s,"autostart"));b->full_fps=json_is_true(json_object_get(s,"full_fps"));b->mute_speakers=json_is_true(json_object_get(s,"mute_speakers"));b->clipboard=json_is_true(json_object_get(s,"clipboard"));
+    b->max_guests=(int)json_integer_value(json_object_get(s,"max_guests"));b->exclusive_input=json_is_true(json_object_get(s,"exclusive_input"));
+    json_int_t port=json_integer_value(json_object_get(s,"port"));if(port)snprintf(b->port,sizeof b->port,"%lld",(long long)port);else b->port[0]=0;
+    utf8_copy(b->audio_device,sizeof b->audio_device,json_string_value(json_object_get(s,"audio_device")));
+}
+/* Empty is lowlatd's own start port; anything else must be plain digits. */
+static int form_port(const char *text,json_int_t *port){
+    *port=0;if(!*text)return 0;
+    for(const char *p=text;*p;p++){if(*p<'0'||*p>'9'||*port>65535)return -1;*port=*port*10+(*p-'0');}
+    return 0;
 }
 json_t *ph_bridge_form(ph_bridge *w,const struct Bridge *b,ph_error *e){
     if(b->codec<0||b->codec>=2||b->quality<0||b->quality>=3||b->encoder<0||b->encoder>=3||b->conversion<0||b->conversion>=3){ph_fail(e,"Invalid native form selection");return NULL;}
     if(!memchr(b->name,0,sizeof b->name)||!memchr(b->output,0,sizeof b->output)||!memchr(b->gpu,0,sizeof b->gpu)||!memchr(b->encoding_gpu,0,sizeof b->encoding_gpu)){ph_fail(e,"Invalid native form text");return NULL;}
-    if((b->autostart!=0&&b->autostart!=1)||(b->full_fps!=0&&b->full_fps!=1)||(b->mute_speakers!=0&&b->mute_speakers!=1)||(b->clipboard!=0&&b->clipboard!=1)){ph_fail(e,"Invalid native boolean selection");return NULL;}
+    if((b->autostart!=0&&b->autostart!=1)||(b->full_fps!=0&&b->full_fps!=1)||(b->mute_speakers!=0&&b->mute_speakers!=1)||(b->clipboard!=0&&b->clipboard!=1)||(b->exclusive_input!=0&&b->exclusive_input!=1)){ph_fail(e,"Invalid native boolean selection");return NULL;}
+    if(!memchr(b->port,0,sizeof b->port)||!memchr(b->audio_device,0,sizeof b->audio_device)){ph_fail(e,"Invalid native form text");return NULL;}
+    json_int_t port;if(form_port(b->port,&port)){ph_fail(e,"Host port must be digits, or empty for automatic");return NULL;}
     json_t *s=w->settings?json_deep_copy(w->settings):ph_settings_default();
     json_t *name=json_string(b->name),*output=json_string(b->output),*gpu=json_string(b->gpu);if(!name||!output||!gpu){json_decref(name);json_decref(output);json_decref(gpu);json_decref(s);ph_fail(e,"Invalid UTF-8 in native form");return NULL;}
     json_object_set_new(s,"encoding_gpu",json_string(b->encoding_gpu));
     json_object_set_new(s,"name",name);json_object_set_new(s,"output",output);json_object_set_new(s,"gpu",gpu);
     json_object_set_new(s,"fps",json_integer(b->fps));json_object_set_new(s,"bitrate",json_integer(b->bitrate));json_object_set_new(s,"codec",json_string(codec[b->codec]));json_object_set_new(s,"quality",json_string(quality[b->quality]));json_object_set_new(s,"encoder",json_string(encoder[b->encoder]));json_object_set_new(s,"conversion",json_string(conversion[b->conversion]));
-    json_object_set_new(s,"autostart",json_boolean(b->autostart));json_object_set_new(s,"full_fps",json_boolean(b->full_fps));json_object_set_new(s,"mute_speakers",json_boolean(b->mute_speakers));json_object_set_new(s,"clipboard",json_boolean(b->clipboard));json_t *valid=ph_settings_validate(s,e);json_decref(s);return valid;
+    json_object_set_new(s,"autostart",json_boolean(b->autostart));json_object_set_new(s,"full_fps",json_boolean(b->full_fps));json_object_set_new(s,"mute_speakers",json_boolean(b->mute_speakers));json_object_set_new(s,"clipboard",json_boolean(b->clipboard));
+    json_object_set_new(s,"max_guests",json_integer(b->max_guests));json_object_set_new(s,"exclusive_input",json_boolean(b->exclusive_input));json_object_set_new(s,"port",json_integer(port));json_object_set_new(s,"audio_device",json_string(b->audio_device));json_t *valid=ph_settings_validate(s,e);json_decref(s);return valid;
 }
 /* Every GPU the inventory knows: those with a connected display first, then
  * the rest, labelled, because capture needs a lit display on that GPU. */
@@ -49,11 +61,34 @@ void ph_bridge_publish_gpus(struct Bridge *b,json_t *devices){
     }
     b->gpu_count=count;
 }
+/* The desktop's outputs, plus the configured device when it has gone, so a
+ * missing device is shown as such rather than as another selection. */
+void ph_bridge_publish_audio(struct Bridge *b,json_t *outputs){
+    unsigned count=0,cap=sizeof b->audio_ids/sizeof *b->audio_ids;int found=!strcmp(b->audio_device,"auto");json_t *o;size_t i;
+    json_array_foreach(outputs,i,o){
+        const char *id=json_string_value(json_object_get(o,"id")),*label=json_string_value(json_object_get(o,"label"));
+        if(!id||!label||strlen(id)>=sizeof *b->audio_ids)continue;
+        int selected=!strcmp(id,b->audio_device);
+        /* Keep a slot for the configured device until it has been seen. */
+        if(!selected&&count+!found>=cap)continue;
+        found|=selected;
+        utf8_copy(b->audio_ids[count],sizeof b->audio_ids[count],id);utf8_copy(b->audio_labels[count],sizeof b->audio_labels[count],label);count++;
+    }
+    if(!found&&*b->audio_device){
+        char text[160];snprintf(text,sizeof text,"%.80s (unavailable)",b->audio_device);
+        utf8_copy(b->audio_ids[count],sizeof b->audio_ids[count],b->audio_device);utf8_copy(b->audio_labels[count],sizeof b->audio_labels[count],text);count++;
+    }
+    b->audio_count=count;
+}
+static void refresh_audio(ph_bridge *w){
+    ph_error ignored={0};json_t *outputs=ph_audio_outputs(w->ctx,&ignored);
+    ph_bridge_publish_audio(w->state,outputs);json_decref(outputs);
+}
 int ph_bridge_refresh(ph_bridge *w,int settings,int preserve_message,ph_error *e){
     json_t *result=ph_helper_call(w->ctx,"status",NULL,0,e);if(!result)return -1;struct Bridge *b=w->state;
     b->configured=json_is_true(json_object_get(result,"configured"));const char *service=json_string_value(json_object_get(json_object_get(result,"service"),"ActiveState"));b->running=service&&!strcmp(service,"active");
     if(!preserve_message){char text[256];snprintf(text,sizeof text,"Linux host: %s | %s",service?service:"unknown",b->configured?"Host account connected":"Connect the Host account first");ph_bridge_message(b,text);}
-    if(settings){json_t *s=ph_settings_validate(json_object_get(result,"settings"),e);if(!s){json_decref(result);return -1;}json_decref(w->settings);w->settings=s;load_form(b,s);}
+    if(settings){json_t *s=ph_settings_validate(json_object_get(result,"settings"),e);if(!s){json_decref(result);return -1;}json_decref(w->settings);w->settings=s;ph_bridge_load_form(b,s);}
     ph_bridge_publish_gpus(b,json_object_get(result,"devices"));
     ph_bridge_extra_refresh(b,result);if(!b->running)b->host_peer_id[0]=0;json_decref(result);return 0;
 }
@@ -104,11 +139,14 @@ void ph_bridge_publish_room(struct Bridge *b,const ph_room *room){
     } else b->stream[0]=0;
 }
 static void *worker(void *arg){
-    ph_bridge *w=arg;struct Bridge *b=w->state;json_t *seen=NULL,*attempted=NULL;double changed=ph_now(),next_poll=ph_now()+2;int sticky=0;
+    ph_bridge *w=arg;struct Bridge *b=w->state;json_t *seen=NULL,*attempted=NULL;double changed=ph_now(),next_poll=ph_now()+2,next_audio=ph_now()+10;int sticky=0;char form_error[PH_ERROR_SIZE]="";
     while(!w->stopped){
         struct timespec delay={0,100000000};nanosleep(&delay,NULL);if(w->stopped)break;
         ph_error e={0};struct Bridge snapshot;memcpy(&snapshot,b,sizeof snapshot);json_t *form=ph_bridge_form(w,&snapshot,&e);
         int form_changed=form?(!seen||!json_equal(form,seen)):0;
+        /* An edit that cannot be saved says why, once, instead of silently
+         * never saving. */
+        if(!form&&strcmp(form_error,e.text)){snprintf(form_error,sizeof form_error,"%s",e.text);ph_bridge_message(b,e.text);sticky=1;}else if(form)form_error[0]=0;
         if(form_changed){json_decref(seen);seen=json_incref(form);changed=ph_now();sticky=0;}
         uint32_t seq=__atomic_load_n(&b->seq,__ATOMIC_ACQUIRE),ack=__atomic_load_n(&b->ack,__ATOMIC_RELAXED);unsigned action=b->action;
         if(seq!=ack){
@@ -134,6 +172,7 @@ static void *worker(void *arg){
             if(got>0)ph_bridge_publish_room(b,&room);
             else if(got<0){ph_tray_close(&w->tray);ph_bridge_publish_room(b,NULL);w->tray_retry=ph_now()+3;}
         }
+        if(ph_now()>=next_audio&&!w->stopped){refresh_audio(w);next_audio=ph_now()+10;}
         if(ph_now()>=next_poll&&!w->stopped){
             /* Poll only status. Never reload editable fields while the user types. */
             int unsaved=!form||!json_equal(form,w->settings);if(ph_bridge_refresh(w,0,sticky||unsaved,&e)){if(!sticky){ph_bridge_message(b,e.text);sticky=1;}}next_poll=ph_now()+2;
@@ -150,8 +189,8 @@ int ph_bridge_start(ph_bridge *w,ph_context *c,int read_only,ph_error *e){
     ph_path(w->path,sizeof w->path,w->directory,"bridge");int fd=open(w->path,O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC,0600);if(fd<0){rmdir(w->directory);return ph_fail(e,"Cannot create Host bridge");}
     if(ftruncate(fd,sizeof(struct Bridge))){close(fd);unlink(w->path);rmdir(w->directory);return ph_fail(e,"Cannot size Host bridge");}
     w->state=mmap(NULL,sizeof(struct Bridge),PROT_READ|PROT_WRITE,MAP_SHARED,fd,0);close(fd);if(w->state==MAP_FAILED){w->state=NULL;unlink(w->path);rmdir(w->directory);return ph_fail(e,"Cannot map Host bridge");}
-    w->state->magic=0x50484f53;w->state->version=BRIDGE_VERSION;w->settings=ph_settings_default();load_form(w->state,w->settings);ph_bridge_message(w->state,"Loading Linux host status...");
-    c->cancel=&w->stopped;if(ph_bridge_refresh(w,1,0,e))ph_bridge_message(w->state,e->text);
+    w->state->magic=0x50484f53;w->state->version=BRIDGE_VERSION;w->settings=ph_settings_default();ph_bridge_load_form(w->state,w->settings);ph_bridge_message(w->state,"Loading Linux host status...");
+    c->cancel=&w->stopped;if(ph_bridge_refresh(w,1,0,e))ph_bridge_message(w->state,e->text);refresh_audio(w);
     if(pthread_create(&w->thread,NULL,worker,w)){ph_bridge_stop(w);return ph_fail(e,"Cannot start Host status worker");}w->started=1;return 0;
 }
 void ph_bridge_stop(ph_bridge *w){w->stopped=1;if(w->started)pthread_join(w->thread,NULL);w->started=0;ph_tray_close(&w->tray);if(w->ctx)w->ctx->cancel=NULL;if(w->state)munmap(w->state,sizeof(struct Bridge));w->state=NULL;json_decref(w->settings);w->settings=NULL;if(*w->path)unlink(w->path);if(*w->directory)rmdir(w->directory);}

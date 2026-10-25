@@ -14,5 +14,9 @@
   "autostart": false,
   "client_decoder": "hardware",
   "client_renderer": "opengl",
-  "encoding_gpu": "auto"
+  "encoding_gpu": "auto",
+  "max_guests": 1,
+  "exclusive_input": false,
+  "audio_device": "auto",
+  "port": 0
 }

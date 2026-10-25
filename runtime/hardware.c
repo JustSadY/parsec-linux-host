@@ -75,3 +75,17 @@ json_t *ph_encoder_select(json_t *s,json_t *devices,ph_error *e){
     }
     ph_fail(e,"Selected encoding GPU is unavailable; it may be bound to VFIO");return NULL;
 }
+
+/* The desktop user's PulseAudio/PipeWire outputs, as the monitor sources
+ * lowlatd records from. Runs in the user's session, never as root. */
+json_t *ph_audio_outputs(ph_context *c,ph_error *e){
+    char *args[]={(char*)c->pactl,"-f","json","list","sinks",NULL};ph_process p;
+    if(c->run(c,args,NULL,NULL,5,&p,e)||p.code){ph_process_free(&p);ph_fail(e,"Audio devices unavailable");return NULL;}
+    json_t *sinks=json_loads(p.out,0,NULL),*outputs=json_array(),*sink;size_t i;ph_process_free(&p);
+    json_array_foreach(sinks,i,sink){
+        const char *id=json_string_value(json_object_get(sink,"monitor_source")),*label=json_string_value(json_object_get(sink,"description"));
+        if(!id||!matches(id,"^[A-Za-z0-9_][A-Za-z0-9_.:@+-]{0,126}$"))continue;
+        json_array_append_new(outputs,json_pack("{s:s,s:s}","id",id,"label",label&&*label?label:id));
+    }
+    json_decref(sinks);return outputs;
+}

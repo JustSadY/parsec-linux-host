@@ -7,7 +7,7 @@
 #include <string.h>
 #include <unistd.h>
 
-static const char defaults[]="{\"name\":\"\",\"gpu\":\"auto\",\"encoding_gpu\":\"auto\",\"output\":\"auto\",\"fps\":60,\"bitrate\":10,\"codec\":\"h264\",\"encoder\":\"auto\",\"conversion\":\"auto\",\"quality\":\"lowest-latency\",\"full_fps\":false,\"mute_speakers\":true,\"clipboard\":true,\"autostart\":false,\"client_decoder\":\"hardware\",\"client_renderer\":\"opengl\"}";
+static const char defaults[]="{\"name\":\"\",\"gpu\":\"auto\",\"encoding_gpu\":\"auto\",\"output\":\"auto\",\"fps\":60,\"bitrate\":10,\"codec\":\"h264\",\"encoder\":\"auto\",\"conversion\":\"auto\",\"quality\":\"lowest-latency\",\"full_fps\":false,\"mute_speakers\":true,\"clipboard\":true,\"autostart\":false,\"client_decoder\":\"hardware\",\"client_renderer\":\"opengl\",\"max_guests\":1,\"exclusive_input\":false,\"audio_device\":\"auto\",\"port\":0}";
 json_t *ph_settings_default(void){return json_loads(defaults,0,NULL);}
 static int match(const char *s,const char *pattern){regex_t r;if(regcomp(&r,pattern,REG_EXTENDED|REG_NOSUB))return 0;int ok=regexec(&r,s,0,NULL,0)==0;regfree(&r);return ok;}
 static int choice(json_t *s,const char *key,const char *const *values){json_t *v=json_object_get(s,key);if(!json_is_string(v)||json_string_length(v)!=strlen(json_string_value(v)))return 0;for(int i=0;values[i];i++)if(!strcmp(json_string_value(v),values[i]))return 1;return 0;}
@@ -27,13 +27,18 @@ json_t *ph_settings_validate(json_t *data,ph_error *e){
     const char *encoding_gpu=json_string_value(json_object_get(s,"encoding_gpu"));
     if(!encoding_gpu||json_string_length(json_object_get(s,"encoding_gpu"))!=strlen(encoding_gpu)||!match(encoding_gpu,"^(auto|[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7])$")){ph_fail(e,"Invalid encoding GPU PCI address");goto bad;}
     if(!output||json_string_length(json_object_get(s,"output"))!=strlen(output)||!match(output,"^[A-Za-z0-9_.-]{1,40}$")){ph_fail(e,"Invalid display connector");goto bad;}
-    const char *ints[]={"fps","bitrate"};int low[]={30,5},high[]={240,100};
-    for(int i=0;i<2;i++){json_t *v=json_object_get(s,ints[i]);if(!json_is_integer(v)||json_integer_value(v)<low[i]||json_integer_value(v)>high[i]){ph_fail(e,"%s must be between %d and %d",ints[i],low[i],high[i]);goto bad;}}
+    const char *ints[]={"fps","bitrate","max_guests"};int low[]={30,5,1},high[]={240,100,BRIDGE_GUESTS_MAX};
+    for(int i=0;i<3;i++){json_t *v=json_object_get(s,ints[i]);if(!json_is_integer(v)||json_integer_value(v)<low[i]||json_integer_value(v)>high[i]){ph_fail(e,"%s must be between %d and %d",ints[i],low[i],high[i]);goto bad;}}
+    /* Zero keeps lowlatd's own start port; it walks upward from either. */
+    json_t *port=json_object_get(s,"port");if(!json_is_integer(port)||(json_integer_value(port)!=0&&(json_integer_value(port)<1024||json_integer_value(port)>65535))){ph_fail(e,"Host port must be 0 or between 1024 and 65535");goto bad;}
+    /* A PulseAudio source name, passed as one argv element; never an option. */
+    const char *audio=json_string_value(json_object_get(s,"audio_device"));
+    if(!audio||json_string_length(json_object_get(s,"audio_device"))!=strlen(audio)||!match(audio,"^(auto|[A-Za-z0-9_][A-Za-z0-9_.:@+-]{0,126})$")){ph_fail(e,"Invalid audio device");goto bad;}
     const char *keys[]={"codec","encoder","conversion","quality","client_decoder","client_renderer"};
     const char *const choices[][4]={{"h264","h265",NULL},{"auto","nvenc","vaapi",NULL},{"auto","vulkan","opengl",NULL},{"lowest-latency","balanced","highest",NULL},{"hardware","software",NULL},{"opengl","vulkan",NULL}};
     for(int i=0;i<6;i++)if(!choice(s,keys[i],choices[i])){ph_fail(e,"Unsupported %s",keys[i]);goto bad;}
-    const char *bools[]={"full_fps","mute_speakers","clipboard","autostart"};
-    for(int i=0;i<4;i++)if(!json_is_boolean(json_object_get(s,bools[i]))){ph_fail(e,"%s must be a boolean",bools[i]);goto bad;}
+    const char *bools[]={"full_fps","mute_speakers","clipboard","autostart","exclusive_input"};
+    for(int i=0;i<5;i++)if(!json_is_boolean(json_object_get(s,bools[i]))){ph_fail(e,"%s must be a boolean",bools[i]);goto bad;}
     if(!strcmp(json_string_value(json_object_get(s,"encoder")),"nvenc")&&!strcmp(json_string_value(json_object_get(s,"conversion")),"opengl")){ph_fail(e,"NVENC requires Automatic or Vulkan conversion");goto bad;}
     return s;
 bad:json_decref(s);return NULL;
@@ -72,7 +77,10 @@ char **ph_host_argv(ph_context *c,json_t *settings,json_t *device,const char *se
     ADD("--fps");snprintf(number,sizeof number,"%lld",(long long)json_integer_value(json_object_get(s,"fps")));ADD(number);
     ADD("--bitrate");snprintf(number,sizeof number,"%lld",(long long)json_integer_value(json_object_get(s,"bitrate")));ADD(number);
     ADD("--codec");ADD(json_string_value(json_object_get(s,"codec")));ADD("--quality");ADD(json_string_value(json_object_get(s,"quality")));
-    ADD("--max-guests");ADD("1");
+    ADD("--max-guests");snprintf(number,sizeof number,"%lld",(long long)json_integer_value(json_object_get(s,"max_guests")));ADD(number);
+    if(json_integer_value(json_object_get(s,"port"))){ADD("--port");snprintf(number,sizeof number,"%lld",(long long)json_integer_value(json_object_get(s,"port")));ADD(number);}
+    if(json_is_true(json_object_get(s,"exclusive_input")))ADD("--exclusive-pointer");
+    const char *audio=json_string_value(json_object_get(s,"audio_device"));if(strcmp(audio,"auto")){ADD("--audio-device");ADD(audio);}
     /* A friend share secret relaxes owner-only admission to invite-only, which
      * the signaling service gates on the secret carried by the invite link. */
     if(secret&&*secret){ADD("--secret");ADD(secret);}else{ADD("--owner-only");}

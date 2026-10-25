@@ -7,7 +7,7 @@ claim that newer official Parsec modules are compatible. The README gives the
 user-facing setup and support boundaries.
 
 The runtime is compiled C (`runtime/`). The extension runs inside the actual
-vendor client, calls its native ImGui helpers and shares ABI 7 through
+vendor client, calls its native ImGui helpers and shares ABI 8 through
 `native/bridge.h`. Python is build/test tooling only.
 
 ## Artifact and static evidence
@@ -123,7 +123,25 @@ VA-API node uses eight-bit NV12 readback and hardware upload, preserving origina
 capture timestamps. CPU-visible cached staging memory is preferred, avoiding
 slow reads from uncached GPU BAR memory. This is explicit RAM staging, not a
 zero-copy or zero-overhead claim. Ten-bit, 4:4:4 and OpenGL staging are refused.
-The native Encoding GPU selector and C autosave worker share ABI 7 (4200 bytes).
+The native Encoding GPU selector and C autosave worker share the bridge ABI.
+
+## Host options mapped to lowlatd (ABI 8)
+
+ABI 8 (6144 bytes) appends four Windows Parsec host options that lowlatd
+already implements, so no lowlat patch is involved: `max_guests` (1-8, the
+bridge's guest capacity) becomes `--max-guests`; `exclusive_input` becomes
+`--exclusive-pointer` (pointer arbitration only); `audio_device` becomes
+`--audio-device` with a PulseAudio monitor-source name; `port` (0 or
+1024-65535) becomes `--port`. Zero and `auto` omit the flag, leaving
+lowlatd's own behaviour, and keep old settings files valid.
+
+The unprivileged worker lists outputs with `/usr/bin/pactl -f json list sinks`
+in the desktop session and publishes their monitor sources. Names are checked
+against `^[A-Za-z0-9_][A-Za-z0-9_.:@+-]{0,126}$` in the worker and again by the
+root validator, and are passed as one argv element, so none can become an
+option. A configured device that is gone stays listed as unavailable. The port
+is edited as text and parsed by the worker; a form that cannot be saved now
+reports why on the page instead of silently not saving.
 
 An actual local stream loop, without a signaling peer, captured RTX 5070 DP-1
 and encoded on RX 570; both H.264 and HEVC outputs decoded successfully in

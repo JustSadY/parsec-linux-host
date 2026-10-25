@@ -31,7 +31,7 @@ source=("$pkgname-$pkgver.tar.gz"
         "parsec-linux-$_parsecver.deb::https://builds.parsec.app/package/parsec-linux.deb"
         "parsecd-$_modulever.so::https://builds.parsec.app/channel/release/binary/linux/gz/parsecd-$_modulever.so")
 noextract=("parsec-linux-$_parsecver.deb" "parsecd-$_modulever.so")
-sha256sums=('b85ec0275ff2fce16285ad7f8cd660678e38efbf60a2051ee6209a69c462b129'
+sha256sums=('67ba362dc6412ac8fa251dd9b7d02f78cb30cba6379391bc66024584bcdb15c5'
             'e30b4af9f4030b698bd814588fa5e8c3687b12efe823fb47f1ab78c1eb1bb55d'
             'c8a4407713d72dcb1c59f082977e81e1b9e8ffd679d0666882cde4c8a0821dd2'
             '10af623d573b566bfd3f9a5c36a509001e02be3da5a60e0f2e0f6920cb6eb983')

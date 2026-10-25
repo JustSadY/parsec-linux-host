@@ -17,7 +17,7 @@ typedef struct { int code; char *out; } ph_process;
 typedef struct ph_context ph_context;
 struct ph_context {
     const char *etc, *lib, *drm, *systemctl, *journalctl, *helper, *pkexec;
-    const char *dropin, *peer_cache, *rules;
+    const char *dropin, *peer_cache, *rules, *pactl;
     uid_t euid, caller_uid;
     volatile sig_atomic_t *cancel;
     int (*run)(ph_context *, char *const [], const char *, char *const [], int, ph_process *, ph_error *);
@@ -39,6 +39,7 @@ json_t *ph_inventory(const char *, ph_error *);
 json_t *ph_resolve(json_t *, json_t *, ph_error *);
 json_t *ph_wait_display(ph_context *, json_t *, ph_error *);
 json_t *ph_encoder_select(json_t *, json_t *, ph_error *);
+json_t *ph_audio_outputs(ph_context *, ph_error *);
 char **ph_host_argv(ph_context *, json_t *, json_t *, const char *secret, ph_error *);
 void ph_argv_free(char **);
 json_t *ph_status(ph_context *, ph_error *);
@@ -87,6 +88,8 @@ void ph_tray_close(ph_tray *);
 int ph_tray_parse_state(const char *body, size_t length, ph_room *);
 void ph_bridge_publish_room(struct Bridge *, const ph_room *);
 void ph_bridge_publish_gpus(struct Bridge *, json_t *devices);
+void ph_bridge_publish_audio(struct Bridge *, json_t *outputs);
+void ph_bridge_load_form(struct Bridge *, json_t *settings);
 
 typedef struct {
     ph_context *ctx;

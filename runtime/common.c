@@ -29,7 +29,7 @@ void ph_context_init(ph_context *c) {
     c->helper=PH_LIB "/hostctl";c->pkexec="/usr/bin/pkexec";
     c->dropin="/etc/systemd/system/parsec-host.service.d";
     c->peer_cache="/run/parsec-host/host-peer.json";
-    c->rules="/etc/polkit-1/rules.d";
+    c->rules="/etc/polkit-1/rules.d";c->pactl="/usr/bin/pactl";
     c->euid=geteuid();c->caller_uid=c->euid?c->euid:caller();c->run=ph_run;c->request=ph_request;
 }
 json_t *ph_read_json(const char *path,size_t limit,int private_file,ph_error *e) {

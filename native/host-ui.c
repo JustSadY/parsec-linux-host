@@ -35,7 +35,7 @@ extern void *vendor_calloc(size_t, size_t);
 #pragma GCC visibility pop
 
 /* Shared only with our unprivileged launcher. No account/session data. */
-_Static_assert(sizeof(struct Bridge) == 4200, "bridge ABI");
+_Static_assert(sizeof(struct Bridge) == 6144, "bridge ABI");
 static struct Bridge *bridge;
 static int attempted, mismatched;
 
@@ -149,6 +149,16 @@ void host_page(float width, void *context) {
     padding = row(width, "Host Name", "The name shown in your list of computers.");
     input("", "Computer name", b->name, sizeof(b->name), 0, 0, 0);
     finish(width, padding);
+    padding = row(width, "Max Guests", "How many people can be connected at once. Everyone except your own account still needs approval.");
+    const char *volatile guests[] = {S("1"), S("2"), S("3"), S("4"), S("5"), S("6"), S("7"), S("8")};
+    int guest_selected = b->max_guests >= 1 && b->max_guests <= 8 ? b->max_guests - 1 : 0;
+    if (combo("", &guest_selected, (const char *const *)guests, 8, -1)) b->max_guests = guest_selected + 1;
+    finish(width, padding);
+    padding = row(width, "Exclusive Input Mode", "Only one guest moves the mouse at a time, until it is idle for half a second. Keyboards and gamepads stay shared.");
+    const char *volatile exclusive[] = {S("Disabled"), S("Enabled")};
+    b->exclusive_input = !!b->exclusive_input;
+    combo("", &b->exclusive_input, (const char *const *)exclusive, 2, -1);
+    finish(width, padding);
     padding = row(width, "Display", "The Linux display connector to capture, for example DP-1.");
     input("", "auto or DP-1", b->output, sizeof(b->output), 0, 0, 0);
     finish(width, padding);
@@ -244,6 +254,29 @@ void host_page(float width, void *context) {
     padding = row(width, "Clipboard", "Share clipboard text with the connected owner.");
     b->clipboard = !!b->clipboard;
     combo("", &b->clipboard, (const char *const *)booleans, 2, -1);
+    finish(width, padding);
+
+    padding = row(width, "Audio Device", "The output guests hear. Default follows the desktop's default output.");
+    const char *audio[9];
+    audio[0] = "Default output";
+    int audio_count = b->audio_count > 8 ? 8 : b->audio_count, audio_selected = 0;
+    b->audio_device[127] = 0;
+    for (int i = 0; i < audio_count; ++i) {
+        b->audio_ids[i][127] = b->audio_labels[i][95] = 0;
+        audio[i + 1] = b->audio_labels[i];
+        if (equal(b->audio_device, b->audio_ids[i])) audio_selected = i + 1;
+    }
+    if (combo("", &audio_selected, audio, audio_count + 1, -1)) {
+        const char *chosen = audio_selected ? b->audio_ids[audio_selected - 1] : "auto";
+        unsigned i = 0;
+        for (; i < 127 && chosen[i]; ++i) b->audio_device[i] = chosen[i];
+        b->audio_device[i] = 0;
+    }
+    finish(width, padding);
+
+    padding = row(width, "Host Start Port", "First UDP port to try for guests. Leave empty for automatic.");
+    b->port[7] = 0;
+    input("", "Automatic", b->port, sizeof(b->port), 0, 0, 0);
     finish(width, padding);
 
     gap(20);

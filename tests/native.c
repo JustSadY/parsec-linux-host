@@ -16,7 +16,10 @@ void same_line(float a,float b){(void)a;(void)b;}
 void begin_group(void){} void end_group(void){} void pop_id(void){}
 void pop_vars(int a){(void)a;} void pop_colors(int a){(void)a;} void unindent(float a){(void)a;}
 float cursor_x(void){return 0;} float cursor_y(void){return 0;} void cursor_set(const float*a){(void)a;}
-unsigned char combo(const char*a,int*b,const char*const*c,int d,int e){(void)a;(void)b;(void)c;(void)d;(void)e;return 0;}
+static int combo_calls;
+/* Pick the third entry of the guest-count and audio combos, as a click would. */
+unsigned char combo(const char*a,int*b,const char*const*c,int d,int e){(void)a;(void)e;combo_calls++;
+ if(d>2&&(!strcmp(c[0],"1")||!strcmp(c[0],"Default output"))){*b=2;return 1;}return 0;}
 unsigned char input(const char*a,const char*b,char*c,size_t d,int e,void*f,void*g){(void)a;(void)b;(void)c;(void)d;(void)e;(void)f;(void)g;return 0;}
 unsigned char button(float a,const char*b,int c){(void)a;(void)b;(void)c;return 0;}
 char *vendor_getenv(const char*a){(void)a;return NULL;} float vendor_roundf(float a){return a;}
@@ -54,5 +57,11 @@ int main(void){
  memset(command,0,sizeof command);put32(command,0xf);put32(command+4,77);command[8]=1;command[10]=1;assert(linux_guest_command(0,command,12,&size)&&b.action==13&&b.permissions_guest==77&&b.permissions_value[0]&&!b.permissions_value[1]&&b.permissions_value[2]);idle(&b);
  put32(command,0x10);assert(linux_guest_command(0,command,12,&size)&&b.action==10&&b.kick_guest==77);idle(&b);
  linux_guests=0;uintptr_t callbacks[12]={0};unsigned char guest_context[3]={0};expected_callbacks=callbacks;linux_guest_strip(1,guest_context,0,callbacks);assert(strip_calls==1&&!callbacks[1]);
+ static float ui[64];ui[0x80/sizeof(float)]=1;ui_context=(unsigned char*)ui;
+ struct Bridge page={.configured=1,.max_guests=1};strcpy(page.audio_device,"auto");page.audio_count=2;
+ strcpy(page.audio_ids[0],"first.monitor");strcpy(page.audio_labels[0],"First");strcpy(page.audio_ids[1],"second.monitor");strcpy(page.audio_labels[1],"Second");
+ bridge=&page;host_page(1,0);assert(combo_calls>10&&page.max_guests==3&&!strcmp(page.audio_device,"second.monitor"));
+ page.audio_count=99;page.max_guests=42;host_page(1,0);assert(page.max_guests==3);bridge=&b;
+ printf("Native Host page: guest count and audio device selections reach the bridge.\n");
  printf("Native adapters: local identity, native actions, clipboard, guest records, full-width decisions and live permissions passed.\n");
 }

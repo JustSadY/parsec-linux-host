@@ -39,7 +39,17 @@ struct Bridge {
     uint8_t permissions_value[3];
     char encoding_gpu[32];
     int32_t gpu_encoding_ok[8];
+    /* Parsec host options that map onto existing lowlatd flags. port is the
+     * text the page edits; empty means lowlatd's own start port. */
+    int32_t max_guests, exclusive_input;
+    char port[8];
+    /* The desktop's PulseAudio outputs, by monitor source. audio_device is
+     * "auto" for the default output. A configured device that is gone is
+     * still listed, labelled, so the page never shows a silent substitute. */
+    char audio_device[128];
+    uint32_t audio_count;
+    char audio_ids[8][128], audio_labels[8][96];
 };
-#define BRIDGE_VERSION 7
+#define BRIDGE_VERSION 8
 #define BRIDGE_GUESTS_MAX 8
 #endif

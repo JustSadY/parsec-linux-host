@@ -46,7 +46,10 @@ static void test_validation(void) {
         "{\"command\":\"sh\"}", "{\"name\":\"bad\\nname\"}", "{\"gpu\":\"../../dev\"}",
         "{\"fps\":true}", "{\"fps\":999}", "{\"bitrate\":-1}", "{\"output\":\";sh\"}",
         "{\"encoder\":\"cpu\"}", "{\"client_renderer\":\"d3d11\"}",
-        "{\"encoder\":\"nvenc\",\"conversion\":\"opengl\"}"};
+        "{\"encoder\":\"nvenc\",\"conversion\":\"opengl\"}",
+        "{\"max_guests\":0}", "{\"max_guests\":9}", "{\"port\":80}", "{\"port\":70000}",
+        "{\"port\":\"9000\"}", "{\"exclusive_input\":1}", "{\"audio_device\":\"--synth\"}",
+        "{\"audio_device\":\"a b\"}", "{\"audio_device\":\"\"}"};
     for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) {
         json_t *data = json_loads(bad[i], 0, NULL);
         json_t *result = ph_settings_validate(data, &e);
@@ -59,6 +62,128 @@ static void test_validation(void) {
     CHECK(ok != NULL, "empty settings validate");
     json_decref(ok);
     json_decref(empty);
+}
+
+static const char *arg_after(char **argv, const char *flag) {
+    for (int i = 0; argv && argv[i]; i++)
+        if (!strcmp(argv[i], flag))
+            return argv[i + 1];
+    return NULL;
+}
+
+/* Parsec host options that map onto lowlatd flags, and their defaults. */
+static void test_host_options(void) {
+    ph_error e = {0};
+    ph_context c;
+    ph_context_init(&c);
+    json_t *devices = json_pack("[o]", nvidia());
+    json_t *defaults = ph_settings_default();
+    json_t *device = ph_resolve(defaults, devices, &e);
+    char **args = ph_host_argv(&c, defaults, device, NULL, &e);
+    CHECK(args && arg_after(args, "--max-guests") && !strcmp(arg_after(args, "--max-guests"), "1"),
+          "default stays one guest");
+    CHECK(!has_arg(args, "--port") && !has_arg(args, "--exclusive-pointer") && !has_arg(args, "--audio-device"),
+          "defaults leave port, input and audio to lowlatd");
+    ph_argv_free(args);
+    json_t *asked = json_pack("{s:i,s:i,s:b,s:s}", "max_guests", 4, "port", 9100,
+        "exclusive_input", 1, "audio_device", "alsa_output.usb-0600_USBFC1-A-00.analog-stereo.monitor");
+    json_t *set = ph_settings_validate(asked, &e);
+    json_decref(asked);
+    CHECK(set != NULL, "host options validate");
+    args = set ? ph_host_argv(&c, set, device, NULL, &e) : NULL;
+    CHECK(args && !strcmp(arg_after(args, "--max-guests"), "4"), "max guests reaches lowlatd");
+    CHECK(args && !strcmp(arg_after(args, "--port"), "9100"), "start port reaches lowlatd");
+    CHECK(args && has_arg(args, "--exclusive-pointer"), "exclusive input reaches lowlatd");
+    CHECK(args && !strcmp(arg_after(args, "--audio-device"), "alsa_output.usb-0600_USBFC1-A-00.analog-stereo.monitor"),
+          "audio device reaches lowlatd as one argument");
+    ph_argv_free(args);
+
+    struct Bridge b;
+    memset(&b, 0, sizeof b);
+    ph_bridge w = {.settings = set};
+    strcpy(b.name, "");strcpy(b.output, "auto");strcpy(b.gpu, "auto");strcpy(b.encoding_gpu, "auto");
+    b.fps = 60; b.bitrate = 10; b.max_guests = 3; b.exclusive_input = 1;
+    strcpy(b.audio_device, "auto"); strcpy(b.port, "");
+    json_t *form = ph_bridge_form(&w, &b, &e);
+    CHECK(form && json_integer_value(json_object_get(form, "port")) == 0 &&
+          json_integer_value(json_object_get(form, "max_guests")) == 3 &&
+          json_is_true(json_object_get(form, "exclusive_input")) &&
+          !strcmp(json_string_value(json_object_get(form, "audio_device")), "auto"),
+          "native form carries host options; empty port is automatic");
+    json_decref(form);
+    strcpy(b.port, "9a");
+    form = ph_bridge_form(&w, &b, &e);
+    CHECK(!form && strstr(e.text, "port"), "a non-numeric port is refused with a reason");
+    strcpy(b.port, "99999");
+    form = ph_bridge_form(&w, &b, &e);
+    CHECK(!form, "an out-of-range port is refused");
+    strcpy(b.port, "9200");
+    form = ph_bridge_form(&w, &b, &e);
+    CHECK(form && json_integer_value(json_object_get(form, "port")) == 9200, "typed port is saved");
+    json_decref(form);
+    b.max_guests = 9;
+    form = ph_bridge_form(&w, &b, &e);
+    CHECK(!form, "out-of-range guest count is refused");
+    json_decref(form);
+
+    memset(&b, 0, sizeof b);
+    ph_bridge_load_form(&b, set);
+    CHECK(!strcmp(b.port, "9100") && b.max_guests == 4 && b.exclusive_input == 1, "saved options load into the page");
+
+    json_t *outputs = json_pack("[{s:s,s:s},{s:s,s:s}]",
+        "id", "alsa_output.pci-0000_0c_00.4.analog-stereo.monitor", "label", "Speakers",
+        "id", "bluez_output.AA_BB.1.monitor", "label", "Headset");
+    strcpy(b.audio_device, "auto");
+    ph_bridge_publish_audio(&b, outputs);
+    CHECK(b.audio_count == 2 && !strcmp(b.audio_labels[1], "Headset"), "outputs are listed");
+    strcpy(b.audio_device, "alsa_output.usb-gone.analog-stereo.monitor");
+    ph_bridge_publish_audio(&b, outputs);
+    CHECK(b.audio_count == 3 && !strcmp(b.audio_ids[2], b.audio_device) &&
+          strstr(b.audio_labels[2], "(unavailable)"), "a configured device that is gone stays visible");
+    json_t *many = json_array();
+    for (int i = 0; i < 12; i++) {
+        char id[64];
+        snprintf(id, sizeof id, "sink%d.monitor", i);
+        json_array_append_new(many, json_pack("{s:s,s:s}", "id", id, "label", id));
+    }
+    strcpy(b.audio_device, "sink11.monitor");
+    ph_bridge_publish_audio(&b, many);
+    int seen = 0;
+    for (unsigned i = 0; i < b.audio_count; i++)
+        if (!strcmp(b.audio_ids[i], "sink11.monitor")) seen = 1;
+    CHECK(b.audio_count == 8 && seen && !strstr(b.audio_labels[7], "unavailable"),
+          "the configured device keeps a slot in a long list");
+    json_decref(many);
+    json_decref(outputs);
+    json_decref(set);
+    json_decref(device);
+    json_decref(defaults);
+    json_decref(devices);
+}
+
+static int pactl_calls;
+static int fake_pactl(ph_context *c, char *const argv[], const char *input,
+                      char *const env[], int timeout, ph_process *out, ph_error *e) {
+    (void)c; (void)input; (void)env; (void)timeout; (void)e;
+    pactl_calls++;
+    out->code = 0;
+    out->out = strdup(!strcmp(argv[0], "/usr/bin/pactl") && !strcmp(argv[4], "sinks")
+        ? "[{\"name\":\"alsa_output.a\",\"description\":\"Speakers\",\"monitor_source\":\"alsa_output.a.monitor\"},"
+          "{\"name\":\"bad\",\"description\":\"Bad\",\"monitor_source\":\"-bad\"}]"
+        : "not json");
+    return 0;
+}
+static void test_audio_outputs(void) {
+    ph_error e = {0};
+    ph_context c;
+    ph_context_init(&c);
+    c.run = fake_pactl;
+    json_t *outputs = ph_audio_outputs(&c, &e);
+    CHECK(pactl_calls == 1 && json_array_size(outputs) == 1 &&
+          !strcmp(json_string_value(json_object_get(json_array_get(outputs, 0), "id")), "alsa_output.a.monitor") &&
+          !strcmp(json_string_value(json_object_get(json_array_get(outputs, 0), "label")), "Speakers"),
+          "pactl sinks become monitor sources; unsafe names are dropped");
+    json_decref(outputs);
 }
 
 static void test_resolve_and_argv(void) {
@@ -133,7 +258,7 @@ static void test_separate_encoder(void) {
     selected=ph_encoder_select(settings,devices,&e);CHECK(!selected,"missing or VFIO encoder is refused");json_decref(selected);
     json_object_set_new(settings,"encoding_gpu",json_string("../../tmp"));
     json_t *valid=ph_settings_validate(settings,&e);CHECK(!valid,"encoding device accepts PCI identity only");json_decref(valid);
-    struct Bridge b={0};strcpy(b.encoding_gpu,"0000:05:00.0");strcpy(b.gpu,"0000:01:00.0");strcpy(b.output,"DP-1");b.fps=60;b.bitrate=25;b.encoder=2;
+    struct Bridge b={0};strcpy(b.encoding_gpu,"0000:05:00.0");strcpy(b.gpu,"0000:01:00.0");strcpy(b.output,"DP-1");b.fps=60;b.bitrate=25;b.encoder=2;b.max_guests=1;strcpy(b.audio_device,"auto");
     ph_bridge w={.settings=ph_settings_default()};json_t *form=ph_bridge_form(&w,&b,&e);
     CHECK(form&&!strcmp(json_string_value(json_object_get(form,"encoding_gpu")),"0000:05:00.0"),"native selection survives validated autosave snapshot");
     json_decref(form);json_decref(w.settings);json_decref(settings);json_decref(devices);
@@ -295,7 +420,7 @@ static void test_gpus_published(void) {
 }
 
 static void test_bridge_abi(void) {
-    CHECK(sizeof(struct Bridge) == 4200, "bridge struct size");
+    CHECK(sizeof(struct Bridge) == 6144, "bridge struct size");
     struct Bridge b;
     memset(&b, 0, sizeof b);
     json_t *status = json_pack("{s:b,s:s,s:s,s:s}", "share_enabled", 1,
@@ -572,6 +697,8 @@ int main(void) {
     test_defaults();
     test_validation();
     test_resolve_and_argv();
+    test_host_options();
+    test_audio_outputs();
     test_encoder_device();
     test_separate_encoder();
     test_share_secret();

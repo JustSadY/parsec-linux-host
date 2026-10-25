@@ -33,9 +33,10 @@ The official client login and lowlat Host login are separate sessions. Your
 existing `~/.parsec` client profile is preserved; this project's code does not
 read or copy its credentials.
 
-The Host page provides name, display, GPU, NVENC/VA-API, Vulkan/OpenGL
-conversion, FPS, bandwidth, codec, quality, constant FPS, speaker muting,
-clipboard sharing and boot startup settings. Changes **save automatically**;
+The Host page provides name, max guests, exclusive input, display, GPU,
+NVENC/VA-API, Vulkan/OpenGL conversion, FPS, bandwidth, codec, quality,
+constant FPS, speaker muting, clipboard sharing, audio device, host start port
+and boot startup settings. Changes **save automatically**;
 there is no separate Save button. Use **Stop hosting → Start hosting** to apply
 capture/encoding changes. Saving **Start at Boot** updates the system unit's
 enabled state; **Share / Stop Sharing** takes effect immediately on a running
@@ -124,9 +125,22 @@ Fresh-install defaults: hosting and boot startup off; 60 FPS, 10 Mbps, H.264,
 lowest latency, automatic GPU/encoder, current display mode, speaker muting and
 text clipboard sharing on; friend invitations off. With sharing disabled,
 only the account owner may connect. An invitation link permits a guest to
-request access, subject to Host approval. Only one concurrent client is
-supported. An empty Host name uses the system hostname. The FPS setting is a
-ceiling, not measured performance or a display refresh-rate setting.
+request access, subject to Host approval. One guest at a time, exclusive input
+off, the default audio output and lowlatd's own start port are the defaults.
+An empty Host name uses the system hostname. The FPS setting is a ceiling, not
+measured performance or a display refresh-rate setting.
+
+**Max Guests** (1-8) lets several people connect at once; all of them watch one
+shared encode, each has their own gamepad and live Keyboard / Mouse / Gamepad
+permissions, and each can be kicked separately. Every non-owner still waits for
+approval. **Exclusive Input Mode** lets one guest move the mouse at a time
+until it has been idle for half a second; keyboards and gamepads stay shared,
+unlike Windows Parsec, which also locks the keyboard. **Audio Device** lists the
+desktop's PulseAudio/PipeWire outputs; a configured device that is unplugged is
+shown as `(unavailable)` and lowlatd then falls back to the default output.
+**Host Start Port** is the first UDP port lowlatd tries; it walks upward when a
+port is taken. These four options apply after **Stop hosting → Start hosting**.
+Multiple simultaneous guests have not yet been tested with real accounts.
 
 **Start at Boot** enables the system service for subsequent boots. The Host
 account must be connected and a local owner registered. The service waits if
